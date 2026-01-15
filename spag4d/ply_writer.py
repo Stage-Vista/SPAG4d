@@ -1,0 +1,197 @@
+# spag4d/ply_writer.py
+"""
+PLY export for 3D Gaussian Splats.
+
+Output format is compatible with gsplat, SuperSplat, and other 3DGS viewers.
+"""
+
+import numpy as np
+from plyfile import PlyData, PlyElement
+from typing import Optional
+
+# Spherical harmonics DC normalization constant
+SH_C0 = 0.28209479177387814
+
+
+def save_ply_gsplat(
+    gaussians: dict,
+    path: str,
+    sh_degree: int = 0
+) -> None:
+    """
+    Save Gaussians to PLY format compatible with gsplat viewers.
+    
+    Performs coordinate transform from internal Y-up to OpenCV Y-down.
+    
+    Args:
+        gaussians: Dict with means, scales, quats, colors, opacities
+        path: Output PLY file path
+        sh_degree: SH degree (0 = DC only, 3 = full)
+    """
+    # Move to CPU numpy
+    means = gaussians['means'].cpu().numpy()
+    scales = gaussians['scales'].cpu().numpy()
+    quats = gaussians['quats'].cpu().numpy()      # XYZW order internally
+    colors = gaussians['colors'].cpu().numpy()
+    opacities = gaussians['opacities'].cpu().numpy()
+    
+    N = means.shape[0]
+    if N == 0:
+        raise ValueError("No valid Gaussians to save")
+    
+    # ─────────────────────────────────────────────────────────────────
+    # Coordinate Transform: Y-up → OpenCV (Y-down, Z-forward)
+    # This is 180° rotation about X-axis
+    # ─────────────────────────────────────────────────────────────────
+    means_out = means.copy()
+    means_out[:, 1] *= -1  # Flip Y
+    means_out[:, 2] *= -1  # Flip Z
+    
+    # Rotate quaternions by 180° about X: q' = q_x180 * q
+    # q_x180 = [1, 0, 0, 0] in XYZW format (i.e., 90° about X... wait)
+    # Actually 180° about X in XYZW is [1, 0, 0, 0] where X=1, W=0
+    # Quaternion for 180° about X: q = (sin(90°), 0, 0, cos(90°)) = (1, 0, 0, 0) in XYZW
+    quats_out = _quat_multiply(np.array([1., 0., 0., 0.]), quats)
+    
+    # ─────────────────────────────────────────────────────────────────
+    # Encode for PLY storage
+    # ─────────────────────────────────────────────────────────────────
+    
+    # Scales: log-space
+    log_scales = np.log(np.clip(scales, 1e-7, None))
+    
+    # Colors: SH DC coefficients
+    # Convention: f_dc = (color - 0.5) / SH_C0
+    # This maps [0,1] → [-1.77, 1.77] centered at 0
+    sh_dc = (colors - 0.5) / SH_C0
+    
+    # Opacity: logit-space
+    opacities_clamped = np.clip(opacities, 1e-6, 1 - 1e-6)
+    opacity_logit = np.log(opacities_clamped / (1 - opacities_clamped))
+    
+    # ─────────────────────────────────────────────────────────────────
+    # Build PLY structure
+    # ─────────────────────────────────────────────────────────────────
+    
+    # Base properties (always present)
+    dtype_list = [
+        ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+        ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
+        ('f_dc_0', 'f4'), ('f_dc_1', 'f4'), ('f_dc_2', 'f4'),
+    ]
+    
+    # Add SH rest coefficients if degree > 0
+    if sh_degree >= 1:
+        # Total SH coefficients: (degree+1)^2 * 3 channels
+        # DC takes 3, rest is total - 3
+        num_rest = (sh_degree + 1) ** 2 * 3 - 3
+        for i in range(num_rest):
+            dtype_list.append((f'f_rest_{i}', 'f4'))
+    
+    dtype_list.extend([
+        ('opacity', 'f4'),
+        ('scale_0', 'f4'), ('scale_1', 'f4'), ('scale_2', 'f4'),
+        ('rot_0', 'f4'), ('rot_1', 'f4'), ('rot_2', 'f4'), ('rot_3', 'f4'),
+    ])
+    
+    data = np.zeros(N, dtype=dtype_list)
+    
+    # Fill data
+    data['x'], data['y'], data['z'] = means_out.T
+    data['nx'] = data['ny'] = data['nz'] = 0  # Unused
+    data['f_dc_0'], data['f_dc_1'], data['f_dc_2'] = sh_dc.T
+    
+    # Fill SH rest with zeros if present
+    if sh_degree >= 1:
+        num_rest = (sh_degree + 1) ** 2 * 3 - 3
+        for i in range(num_rest):
+            data[f'f_rest_{i}'] = 0
+    
+    data['opacity'] = opacity_logit.squeeze()
+    data['scale_0'], data['scale_1'], data['scale_2'] = log_scales.T
+    
+    # Quaternion: PLY uses WXYZ order, internal is XYZW
+    data['rot_0'] = quats_out[:, 3]  # W
+    data['rot_1'] = quats_out[:, 0]  # X
+    data['rot_2'] = quats_out[:, 1]  # Y
+    data['rot_3'] = quats_out[:, 2]  # Z
+    
+    # Write
+    el = PlyElement.describe(data, 'vertex')
+    PlyData([el], text=False).write(path)
+    print(f"Saved {N:,} Gaussians to {path} (SH degree {sh_degree})")
+
+
+def _quat_multiply(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+    """
+    Quaternion multiplication (XYZW order).
+    
+    Args:
+        q1: First quaternion [4] or [1, 4]
+        q2: Second quaternions [..., 4]
+    
+    Returns:
+        Product q1 * q2 [..., 4]
+    """
+    if q1.ndim == 1:
+        q1 = q1[np.newaxis, :]
+    
+    x1, y1, z1, w1 = q1[..., 0], q1[..., 1], q1[..., 2], q1[..., 3]
+    x2, y2, z2, w2 = q2[..., 0], q2[..., 1], q2[..., 2], q2[..., 3]
+    
+    return np.stack([
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,  # X
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,  # Y
+        w1*z2 + x1*y2 - y1*x2 + z1*w2,  # Z
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,  # W
+    ], axis=-1)
+
+
+def load_ply_gaussians(path: str) -> dict:
+    """
+    Load Gaussians from PLY file.
+    
+    Args:
+        path: Path to PLY file
+    
+    Returns:
+        Dict with decoded means, scales, quats, colors, opacities
+    """
+    import torch
+    
+    ply = PlyData.read(path)
+    vertex = ply['vertex'].data
+    
+    # Positions (already in OpenCV coords)
+    means = np.stack([vertex['x'], vertex['y'], vertex['z']], axis=-1)
+    
+    # Scales from log
+    scales = np.exp(np.stack([
+        vertex['scale_0'], vertex['scale_1'], vertex['scale_2']
+    ], axis=-1))
+    
+    # Colors from SH DC
+    colors = np.stack([
+        vertex['f_dc_0'], vertex['f_dc_1'], vertex['f_dc_2']
+    ], axis=-1) * SH_C0 + 0.5
+    colors = np.clip(colors, 0, 1)
+    
+    # Opacity from logit
+    opacity_logit = vertex['opacity']
+    opacities = 1 / (1 + np.exp(-opacity_logit))
+    
+    # Quaternions: PLY WXYZ → internal XYZW
+    quats = np.stack([
+        vertex['rot_1'],  # X
+        vertex['rot_2'],  # Y
+        vertex['rot_3'],  # Z
+        vertex['rot_0'],  # W
+    ], axis=-1)
+    
+    return {
+        'means': torch.from_numpy(means).float(),
+        'scales': torch.from_numpy(scales).float(),
+        'quats': torch.from_numpy(quats).float(),
+        'colors': torch.from_numpy(colors).float(),
+        'opacities': torch.from_numpy(opacities[:, np.newaxis]).float(),
+    }

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SPAG-4D | 360° to Gaussian Splat</title>
+    <meta name="description" content="Convert 360° equirectangular panoramas to 3D Gaussian Splat files">
+    <link rel="stylesheet" href="css/style.css">
+    <script src="js/three.min.js"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">◉</span>
+                <h1>SPAG-4D</h1>
+                <span class="version">v0.2.0</span>
+            </div>
+            <div class="header-right">
+                <span class="tagline">360° Panorama to Gaussian Splat</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Viewers Row -->
+            <div class="viewers-row">
+                <!-- 360 Input Viewer -->
+                <div class="viewer-panel">
+                    <div class="panel-header">
+                        <h2>360° Input</h2>
+                        <span class="panel-hint">Drag to rotate</span>
+                    </div>
+                    <div class="viewer-container" id="pano-viewer">
+                        <div class="viewer-placeholder">
+                            <div class="placeholder-icon">🌐</div>
+                            <p>Upload a 360° panorama</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3D Splat Viewer -->
+                <div class="viewer-panel">
+                    <div class="panel-header">
+                        <h2>3D Gaussian Splat</h2>
+                        <span class="panel-hint">Orbit & Zoom</span>
+                    </div>
+                    <div class="viewer-container" id="splat-viewer">
+                        <div class="viewer-placeholder">
+                            <div class="placeholder-icon">✨</div>
+                            <p>Convert to see preview</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Controls -->
+            <div class="controls-panel">
+                <!-- Upload & Actions -->
+                <div class="actions-row">
+                    <label class="upload-btn" for="file-input">
+                        <span class="btn-icon">📁</span>
+                        Upload
+                    </label>
+                    <input type="file" id="file-input" accept="image/*" hidden>
+
+                    <span id="filename" class="filename">No file selected</span>
+
+                    <button id="convert-btn" class="action-btn primary" disabled>
+                        <span class="btn-icon">▶️</span>
+                        Convert
+                    </button>
+
+                    <button id="download-ply-btn" class="action-btn" disabled>
+                        <span class="btn-icon">💾</span>
+                        PLY
+                    </button>
+
+                    <button id="download-splat-btn" class="action-btn" disabled>
+                        <span class="btn-icon">💾</span>
+                        SPLAT
+                    </button>
+                </div>
+
+                <!-- Parameters -->
+                <div class="params-row">
+                    <div class="param-group">
+                        <label for="stride">Stride</label>
+                        <select id="stride">
+                            <option value="1">1 (Max)</option>
+                            <option value="2" selected>2</option>
+                            <option value="4">4</option>
+                            <option value="8">8 (Fast)</option>
+                        </select>
+                    </div>
+
+                    <div class="param-group">
+                        <label for="scale-factor">Scale</label>
+                        <input type="number" id="scale-factor" value="1.5" min="0.5" max="3" step="0.1">
+                    </div>
+
+                    <div class="param-group">
+                        <label for="thickness">Thickness</label>
+                        <input type="number" id="thickness" value="0.1" min="0.01" max="0.5" step="0.01">
+                    </div>
+
+                    <div class="param-group">
+                        <label for="global-scale">Depth Scale</label>
+                        <input type="number" id="global-scale" value="1.0" min="0.1" max="10" step="0.1">
+                    </div>
+
+                    <div class="param-group range-group">
+                        <label>Depth Range (m)</label>
+                        <div class="range-inputs">
+                            <input type="number" id="depth-min" value="0.1" min="0.01" max="10" step="0.1">
+                            <span>–</span>
+                            <input type="number" id="depth-max" value="100" min="10" max="1000" step="10">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Status Bar -->
+            <div class="status-bar">
+                <div class="status-left">
+                    <span id="status-text" class="status-text">Ready</span>
+                    <span id="progress-text" class="progress-text"></span>
+                </div>
+                <div class="status-right">
+                    <span id="gpu-status" class="gpu-status">●</span>
+                    <span>GPU</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="js/pano-viewer.js"></script>
+    <script src="js/splat-viewer.js"></script>
+    <script src="js/app.js"></script>
+</body>
+
+</html>
