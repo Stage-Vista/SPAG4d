@@ -31,7 +31,13 @@
                 <!-- 360 Input Viewer -->
                 <div class="viewer-panel">
                     <div class="panel-header">
-                        <h2>360° Input</h2>
+                        <div class="header-left">
+                            <h2>Input Preview</h2>
+                            <div class="header-tabs">
+                                <button id="tab-rgb" class="tab-btn active">RGB</button>
+                                <button id="tab-depth" class="tab-btn" disabled>Depth</button>
+                            </div>
+                        </div>
                         <span class="panel-hint">Drag to rotate</span>
                     </div>
                     <div class="viewer-container" id="pano-viewer">
@@ -46,8 +52,14 @@
                 <div class="viewer-panel">
                     <div class="panel-header">
                         <h2>3D Gaussian Splat</h2>
-                        <button id="reset-view-btn" class="sm-btn" title="Reset View (R)">Reset</button>
-                        <span class="panel-hint">WASD to Move</span>
+                        <div class="header-controls">
+                            <select id="splat-quality" class="sm-select" title="Quality" disabled>
+                                <option value="preview">Preview</option>
+                                <option value="full">Full HQ</option>
+                            </select>
+                            <button id="orbit-view-btn" class="sm-btn" title="Outside View (O)">Outside</button>
+                            <button id="reset-view-btn" class="sm-btn" title="Reset View (R)">Reset</button>
+                        </div>
                     </div>
                     <div class="viewer-container" id="splat-viewer">
                         <div class="viewer-placeholder">
@@ -58,15 +70,7 @@
                 </div>
             </div>
 
-            <!-- Depth Preview -->
-            <div id="depth-panel" class="depth-panel" style="display: none;">
-                <div class="panel-header">
-                    <h2>Depth Map Preview</h2>
-                </div>
-                <div class="depth-container">
-                    <img id="depth-img" src="" alt="Depth Preview">
-                </div>
-            </div>
+
 
             <!-- Controls -->
             <div class="controls-panel">

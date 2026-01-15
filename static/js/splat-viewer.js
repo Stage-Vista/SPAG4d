@@ -479,6 +479,7 @@ class SplatViewer {
         if (e.code === 'Space') this.keys.space = true;
 
         if (key === 'r') this.resetView(); // Hotkey reset
+        if (key === 'o') this.setOutsideView(); // Hotkey outside view
     }
 
     onKeyUp(e) {
@@ -494,6 +495,15 @@ class SplatViewer {
         // Adjust speed with scroll
         this.speed *= (e.deltaY > 0 ? 0.9 : 1.1);
         this.speed = Math.max(0.01, Math.min(5.0, this.speed));
+    }
+
+    setOutsideView() {
+        // Position camera to see the scene from "outside"
+        // Move back and up
+        this.position = { x: 0, y: 5, z: 15 };
+        this.rotation = { yaw: 0, pitch: -0.3 };
+        // Reset keys avoids movement sticking
+        this.keys = { w: false, a: false, s: false, d: false, q: false, e: false };
     }
 
     onResize() {

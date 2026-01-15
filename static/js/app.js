@@ -45,8 +45,17 @@ class SPAG4DApp {
             });
         }
 
+        // Orbit View Button
+        const orbitBtn = document.getElementById('orbit-view-btn');
+        if (orbitBtn) {
+            orbitBtn.addEventListener('click', () => {
+                if (this.splatViewer) this.splatViewer.setOutsideView();
+            });
+        }
+
         // Initialize viewers
         this.initViewers();
+        this.setupTabs();
 
         // Check health
         this.checkHealth();
@@ -54,6 +63,49 @@ class SPAG4DApp {
 
         // Preload test image if available
         this.preloadTestImage();
+    }
+
+    setupTabs() {
+        const tabRgb = document.getElementById('tab-rgb');
+        const tabDepth = document.getElementById('tab-depth');
+
+        if (tabRgb && tabDepth) {
+            tabRgb.addEventListener('click', () => this.switchTab('rgb'));
+            tabDepth.addEventListener('click', () => this.switchTab('depth'));
+        }
+
+        // Quality selector
+        const qualitySelect = document.getElementById('splat-quality');
+        if (qualitySelect) {
+            qualitySelect.addEventListener('change', () => this.handleQualityChange());
+        }
+    }
+
+    handleQualityChange() {
+        if (!this.currentJobId || !this.splatViewer) return;
+        const quality = document.getElementById('splat-quality').value;
+        const url = quality === 'preview'
+            ? `/api/preview/${this.currentJobId}`
+            : `/api/download/${this.currentJobId}?format=splat`;
+
+        console.log(`[App] Loading ${quality} splat: ${url}`);
+        this.splatViewer.loadSplat(url);
+    }
+
+    switchTab(mode) {
+        const tabRgb = document.getElementById('tab-rgb');
+        const tabDepth = document.getElementById('tab-depth');
+
+        if (mode === 'rgb' && this.rgbUrl && this.panoViewer) {
+            tabRgb.classList.add('active');
+            tabDepth.classList.remove('active');
+            this.panoViewer.loadImage(this.rgbUrl);
+
+        } else if (mode === 'depth' && this.depthUrl && this.panoViewer) {
+            tabDepth.classList.add('active');
+            tabRgb.classList.remove('active');
+            this.panoViewer.loadImage(this.depthUrl);
+        }
     }
 
     async preloadTestImage() {
@@ -64,6 +116,7 @@ class SPAG4DApp {
                 // Load test image into pano viewer
                 if (this.panoViewer) {
                     console.log('[App] Preloading test image');
+                    this.rgbUrl = testImagePath; // Save as RGB URL
                     this.panoViewer.loadImage(testImagePath);
                 }
 
@@ -112,7 +165,12 @@ class SPAG4DApp {
         if (this.panoViewer) {
             const url = URL.createObjectURL(file);
             console.log('[App] Loading pano from blob URL:', url);
-            this.panoViewer.loadImage(url);
+            this.rgbUrl = url;
+            this.switchTab('rgb');
+
+            // Disable depth tab
+            const tabDepth = document.getElementById('tab-depth');
+            if (tabDepth) tabDepth.disabled = true;
         } else {
             console.warn('[App] PanoViewer not initialized');
         }
@@ -124,12 +182,15 @@ class SPAG4DApp {
         if (!this.currentFile) return;
 
         this.convertBtn.disabled = true;
-        this.convertBtn.disabled = true;
         this.setStatus('Uploading...', 'Preparing');
 
-        // Hide previous results
-        const depthPanel = document.getElementById('depth-panel');
-        if (depthPanel) depthPanel.style.display = 'none';
+        // Disable depth tab during conversion
+        const tabDepth = document.getElementById('tab-depth');
+        if (tabDepth) tabDepth.disabled = true;
+
+        // Disable quality select
+        const qualitySelect = document.getElementById('splat-quality');
+        if (qualitySelect) qualitySelect.disabled = true;
 
         // Prepare form data
         const formData = new FormData();
@@ -206,23 +267,26 @@ class SPAG4DApp {
                     `${status.splat_count.toLocaleString()} splats • ${status.file_size_mb} MB • ${status.processing_time}s`
                 );
 
-                this.convertBtn.disabled = false;
                 this.downloadPlyBtn.disabled = false;
                 this.downloadSplatBtn.disabled = false;
+
+                // Enable quality select
+                const qualitySelect = document.getElementById('splat-quality');
+                if (qualitySelect) {
+                    qualitySelect.disabled = false;
+                    qualitySelect.value = 'preview';
+                }
 
                 // Load preview into splat viewer
                 if (this.splatViewer && status.preview_url) {
                     this.splatViewer.loadSplat(status.preview_url);
                 }
 
-                // Show depth preview
+                // Enable depth tab
                 if (status.depth_preview_url) {
-                    const depthPanel = document.getElementById('depth-panel');
-                    const depthImg = document.getElementById('depth-img');
-                    if (depthPanel && depthImg) {
-                        depthImg.src = status.depth_preview_url;
-                        depthPanel.style.display = 'block';
-                    }
+                    this.depthUrl = status.depth_preview_url;
+                    const tabDepth = document.getElementById('tab-depth');
+                    if (tabDepth) tabDepth.disabled = false;
                 }
 
             } else if (status.status === 'error') {
