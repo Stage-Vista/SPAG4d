@@ -1,7 +1,7 @@
 # SPAG-4D: 360° Panorama to Gaussian Splat
 
 
-![SPAG-4D Screenshot](tests/Screenshot%202026-01-14%20214507.png)
+![SPAG-4D Demo](assets/demo.gif)
 
 Convert 360° equirectangular panoramas into viewable 3D Gaussian Splat files.
 
