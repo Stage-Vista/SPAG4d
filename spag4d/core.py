@@ -73,7 +73,8 @@ class SPAG4D:
         sky_threshold: float = 80.0,
         sh_degree: int = 0,
         output_format: Literal["ply", "splat"] = "ply",
-        force_erp: bool = False
+        force_erp: bool = False,
+        depth_preview_path: Optional[Union[str, Path]] = None
     ) -> ConversionResult:
         """
         Convert equirectangular panorama to Gaussian splat.
@@ -114,7 +115,7 @@ class SPAG4D:
                 f"Image aspect ratio {aspect:.2f} is not 2:1. "
                 "Use --force-erp to process anyway."
             )
-        
+            
         image_tensor = torch.from_numpy(np.array(img)).to(self.device)
         
         # Get or create spherical grid
@@ -128,6 +129,31 @@ class SPAG4D:
         # Estimate depth with DAP
         with torch.inference_mode():
             depth = self.dap.predict(image_tensor)
+        
+        # Save depth preview if requested
+        if depth_preview_path:
+            try:
+                import cv2
+                
+                # Normalize depth for visualization (log scale for better dynamic range)
+                depth_np = depth.cpu().numpy()
+                depth_log = np.log1p(depth_np)
+                
+                # Robust min/max to avoid outliers
+                d_min = np.percentile(depth_log, 1)
+                d_max = np.percentile(depth_log, 99)
+                
+                if d_max > d_min:
+                    depth_norm = np.clip((depth_log - d_min) / (d_max - d_min), 0, 1)
+                    depth_norm = (depth_norm * 255).astype(np.uint8)
+                else:
+                    depth_norm = np.zeros_like(depth_log, dtype=np.uint8)
+                
+                # Apply colormap (INFERNO is excellent for depth)
+                depth_color = cv2.applyColorMap(depth_norm, cv2.COLORMAP_INFERNO)
+                cv2.imwrite(str(depth_preview_path), depth_color)
+            except Exception as e:
+                print(f"Failed to save depth preview: {e}")
         
         # Apply global scale correction
         depth = depth * global_scale

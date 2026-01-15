@@ -46,7 +46,9 @@ class JobInfo:
         self.input_path: Optional[Path] = None
         self.output_ply_path: Optional[Path] = None
         self.output_splat_path: Optional[Path] = None
+        self.output_splat_path: Optional[Path] = None
         self.preview_splat_path: Optional[Path] = None
+        self.depth_preview_path: Optional[Path] = None
         self.result: Optional[ConversionResult] = None
         self.error: Optional[str] = None
 
@@ -161,6 +163,7 @@ async def convert_panorama(
     job.output_ply_path = TEMP_DIR / f"{job_id}_output.ply"
     job.output_splat_path = TEMP_DIR / f"{job_id}_output.splat"
     job.preview_splat_path = TEMP_DIR / f"{job_id}_preview.splat"
+    job.depth_preview_path = TEMP_DIR / f"{job_id}_depth.jpg"
     
     with open(job.input_path, "wb") as f:
         f.write(content)
@@ -205,7 +208,8 @@ async def process_job(
                 thickness_ratio=thickness,
                 global_scale=global_scale,
                 depth_min=depth_min,
-                depth_max=depth_max
+                depth_max=depth_max,
+                depth_preview_path=str(job.depth_preview_path)
             )
             
             # Generate web preview (low-res SPLAT)
@@ -267,6 +271,7 @@ async def get_job_status(job_id: str):
         response["file_size_mb"] = round(job.result.file_size / 1024 / 1024, 2)
         response["processing_time"] = round(job.result.processing_time, 2)
         response["preview_url"] = f"/api/preview/{job_id}"
+        response["depth_preview_url"] = f"/api/depth_preview/{job_id}"
     
     if job.status == "error":
         response["error"] = job.error
@@ -291,6 +296,26 @@ async def get_preview(job_id: str):
         job.preview_splat_path,
         media_type="application/octet-stream",
         filename=f"preview_{job_id[:8]}.splat"
+    )
+
+
+@app.get("/api/depth_preview/{job_id}")
+async def get_depth_preview(job_id: str):
+    """Get depth map preview image."""
+    if job_id not in jobs:
+        raise HTTPException(404, "Job not found")
+    
+    job = jobs[job_id]
+    if job.status != "complete":
+        raise HTTPException(400, "Job not complete")
+    
+    if not job.depth_preview_path or not job.depth_preview_path.exists():
+        raise HTTPException(404, "Depth preview not available")
+    
+    return FileResponse(
+        job.depth_preview_path,
+        media_type="image/jpeg",
+        filename=f"depth_{job_id[:8]}.jpg"
     )
 
 

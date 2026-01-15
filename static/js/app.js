@@ -124,7 +124,12 @@ class SPAG4DApp {
         if (!this.currentFile) return;
 
         this.convertBtn.disabled = true;
+        this.convertBtn.disabled = true;
         this.setStatus('Uploading...', 'Preparing');
+
+        // Hide previous results
+        const depthPanel = document.getElementById('depth-panel');
+        if (depthPanel) depthPanel.style.display = 'none';
 
         // Prepare form data
         const formData = new FormData();
@@ -208,6 +213,16 @@ class SPAG4DApp {
                 // Load preview into splat viewer
                 if (this.splatViewer && status.preview_url) {
                     this.splatViewer.loadSplat(status.preview_url);
+                }
+
+                // Show depth preview
+                if (status.depth_preview_url) {
+                    const depthPanel = document.getElementById('depth-panel');
+                    const depthImg = document.getElementById('depth-img');
+                    if (depthPanel && depthImg) {
+                        depthImg.src = status.depth_preview_url;
+                        depthPanel.style.display = 'block';
+                    }
                 }
 
             } else if (status.status === 'error') {
