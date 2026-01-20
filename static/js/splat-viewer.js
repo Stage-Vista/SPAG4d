@@ -15,7 +15,20 @@ class SplatViewer {
         this.speed = 0.05;
         this.isDragging = false;
         this.lastMouseX = 0;
+        this.lastMouseX = 0;
         this.lastMouseY = 0;
+
+        // Video state
+        this.videoState = {
+            active: false,
+            playing: false,
+            fps: 10,
+            frames: [], // Array of { positions, colors, opacities, count }
+            currentFrameIdx: 0,
+            lastFrameTime: 0,
+            accumulatedTime: 0,
+            manifest: null
+        };
 
         this.init();
     }
@@ -140,9 +153,75 @@ class SplatViewer {
         return shader;
     }
 
+    async loadVideo(manifestUrl) {
+        console.log('[SplatViewer] Loading Video Manifest:', manifestUrl);
+        this.showMessage('Loading Video...');
+
+        try {
+            // Reset state
+            this.videoState = {
+                active: true,
+                playing: true,
+                fps: 10,
+                frames: [],
+                currentFrameIdx: 0,
+                lastFrameTime: performance.now(),
+                accumulatedTime: 0,
+                manifest: null
+            };
+            this.data = null; // Clear static data
+
+            // Fetch manifest
+            const response = await fetch(manifestUrl);
+            const manifest = await response.json();
+            this.videoState.manifest = manifest;
+            this.videoState.fps = manifest.fps || 10;
+
+            // Base URL for frames
+            const baseUrl = manifestUrl.substring(0, manifestUrl.lastIndexOf('/') + 1);
+
+            // Start fetching frames (buffered)
+            // For now, let's load all frames. If OOM issues, we'll need chunking.
+            let loadedCount = 0;
+            this.showMessage(`Loading frames (0/${manifest.frames.length})...`);
+
+            for (const filename of manifest.frames) {
+                const url = baseUrl + filename;
+                const buffer = await (await fetch(url)).arrayBuffer();
+                const frameData = this.parseSplatData(buffer); // Use helper
+                this.videoState.frames.push(frameData);
+                loadedCount++;
+                if (loadedCount % 5 === 0) {
+                    this.showMessage(`Loading frames (${loadedCount}/${manifest.frames.length})...`);
+                }
+            }
+
+            this.showMessage('Ready');
+            setTimeout(() => {
+                const msg = this.container.querySelector('.viewer-message');
+                if (msg) msg.style.display = 'none';
+                // Hide placeholder
+                const placeholder = this.container.querySelector('.viewer-placeholder');
+                if (placeholder) placeholder.style.display = 'none';
+            }, 1000);
+
+            // Init buffers with first frame
+            this.data = this.videoState.frames[0];
+            this.createBuffers();
+            this.render();
+
+        } catch (error) {
+            console.error('[SplatViewer] Video Load Error:', error);
+            this.showMessage('Error: ' + error.message);
+        }
+    }
+
     async loadSplat(url) {
         console.log('[SplatViewer] Loading SPLAT from:', url);
         this.showMessage('Loading...');
+
+        // Disable video mode
+        this.videoState.active = false;
 
         try {
             const response = await fetch(url);
@@ -155,7 +234,7 @@ class SplatViewer {
             const buffer = await response.arrayBuffer();
             console.log('[SplatViewer] Buffer size:', buffer.byteLength, 'bytes');
 
-            this.parseSplat(buffer);
+            this.data = this.parseSplatData(buffer);
             this.createBuffers();
 
             // Hide placeholder
@@ -175,6 +254,10 @@ class SplatViewer {
             console.error('[SplatViewer] Failed to load SPLAT:', error);
             this.showMessage('Failed to load: ' + error.message);
         }
+    }
+
+    parseSplatData(buffer) {
+        return this.parseSplat(buffer); // Rename existing or wrap it
     }
 
     parseSplat(buffer) {
@@ -224,7 +307,7 @@ class SplatViewer {
             offset += 4 + 15;
         }
 
-        this.data = { positions, colors, opacities, count: vertexCount };
+        return { positions, colors, opacities, count: vertexCount };
     }
 
     float16ToFloat32(h) {
@@ -265,6 +348,32 @@ class SplatViewer {
         if (!this.data || !this.gl) return;
 
         const gl = this.gl;
+
+        // Video Update Logic
+        if (this.videoState.active && this.videoState.playing && this.videoState.frames.length > 0) {
+            const now = performance.now();
+            const dt = (now - this.videoState.lastFrameTime) / 1000;
+            this.videoState.lastFrameTime = now;
+
+            this.videoState.accumulatedTime += dt;
+            const frameDuration = 1.0 / this.videoState.fps;
+
+            if (this.videoState.accumulatedTime >= frameDuration) {
+                this.videoState.accumulatedTime -= frameDuration;
+
+                // Advance frame
+                this.videoState.currentFrameIdx = (this.videoState.currentFrameIdx + 1) % this.videoState.frames.length;
+                this.data = this.videoState.frames[this.videoState.currentFrameIdx];
+
+                // Update buffers (re-upload data)
+                // Optimization: Pre-allocate buffers and use bufferSubData? 
+                // For now, just createBuffers call which rebinds everything. 
+                // Since counts might change per frame, reallocation is safest for prototype.
+                this.createBuffers();
+            }
+        } else if (this.videoState.active) {
+            this.videoState.lastFrameTime = performance.now(); // Keep time sync when paused
+        }
 
         // Clear
         gl.clearColor(0.07, 0.07, 0.1, 1.0);
@@ -476,7 +585,12 @@ class SplatViewer {
         if (this.keys.hasOwnProperty(key)) this.keys[key] = true;
         if (e.key === 'Shift') this.keys.shift = true;
         if (e.key === 'Control') this.keys.ctrl = true;
-        if (e.code === 'Space') this.keys.space = true;
+        if (e.code === 'Space') {
+            this.keys.space = true;
+            if (this.videoState.active) {
+                this.videoState.playing = !this.videoState.playing;
+            }
+        }
 
         if (key === 'r') this.resetView(); // Hotkey reset
         if (key === 'o') this.setOutsideView(); // Hotkey outside view

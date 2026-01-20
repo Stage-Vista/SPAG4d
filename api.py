@@ -7,9 +7,11 @@ import asyncio
 import time
 import uuid
 from pathlib import Path
+import shutil
+import zipfile
+import subprocess
+from typing import Optional, List
 from contextlib import asynccontextmanager
-from typing import Optional
-
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -51,6 +53,13 @@ class JobInfo:
         self.depth_preview_path: Optional[Path] = None
         self.result: Optional[ConversionResult] = None
         self.error: Optional[str] = None
+        
+        # Video specific
+        self.is_video = False
+        self.total_frames = 0
+        self.current_frame = 0
+        self.frame_manifest: list = []
+        self.output_zip_path: Optional[Path] = None
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -180,6 +189,49 @@ async def convert_panorama(
     })
 
 
+@app.post("/api/convert_video")
+async def convert_video(
+    file: UploadFile = File(...),
+    fps: int = Query(10, ge=1, le=60),
+    stride: int = Query(2, ge=1, le=8),
+    scale_factor: float = Query(1.5, ge=0.1, le=5.0),
+    thickness: float = Query(0.1, ge=0.01, le=1.0),
+    global_scale: float = Query(1.0, ge=0.1, le=10.0),
+    depth_min: float = Query(0.1, ge=0.01),
+    depth_max: float = Query(100.0, le=1000.0),
+    start_time: float = Query(0.0, ge=0.0),
+    duration: Optional[float] = Query(None, gt=0.0)
+):
+    """Convert uploaded 360 video to sequence of Gaussian splats."""
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE * 5: # Allow larger upload for video
+        raise HTTPException(400, f"File too large.")
+    
+    job_id = str(uuid.uuid4())
+    job = JobInfo(job_id)
+    job.is_video = True
+    jobs[job_id] = job
+    
+    # Save input video
+    suffix = Path(file.filename).suffix if file.filename else '.mp4'
+    job.input_path = TEMP_DIR / f"{job_id}_input{suffix}"
+    job.output_zip_path = TEMP_DIR / f"{job_id}_sequence.zip"
+    
+    with open(job.input_path, "wb") as f:
+        f.write(content)
+    
+    asyncio.create_task(process_video_job(
+        job, fps, stride, scale_factor, thickness, global_scale, depth_min, depth_max,
+        start_time, duration
+    ))
+    
+    return JSONResponse({
+        "job_id": job_id,
+        "status": "queued",
+        "queue_position": sum(1 for j in jobs.values() if j.status == "queued")
+    })
+
+
 async def process_job(
     job: JobInfo,
     stride: int,
@@ -247,6 +299,125 @@ async def process_job(
         job.last_updated = time.time()
 
 
+async def process_video_job(
+    job: JobInfo,
+    fps: int,
+    stride: int,
+    scale_factor: float,
+    thickness: float,
+    global_scale: float,
+    depth_min: float,
+    depth_max: float,
+    start_time: float = 0.0,
+    duration: Optional[float] = None
+):
+    """Process video conversion logic."""
+    global processor
+    
+    try:
+        job.status = "queued"
+        async with gpu_semaphore:
+            job.status = "processing"
+            job.last_updated = time.time()
+            
+            # 1. Extract frames
+            frames_dir = TEMP_DIR / f"{job.job_id}_frames"
+            frames_dir.mkdir(exist_ok=True)
+            
+            # Run ffmpeg to extract frames
+            cmd = ['ffmpeg']
+            
+            # Seeking
+            if start_time > 0:
+                cmd.extend(['-ss', str(start_time)])
+            if duration:
+                cmd.extend(['-t', str(duration)])
+                
+            cmd.extend([
+                '-i', str(job.input_path),
+                '-vf', f'fps={fps}',
+                '-qscale:v', '2',
+                str(frames_dir / 'frame_%05d.jpg')
+            ])
+            
+            # Run ffmpeg in thread pool
+            await run_in_threadpool(subprocess.run, cmd, check=True, capture_output=True)
+            
+            frames = sorted(list(frames_dir.glob('frame_*.jpg')))
+            job.total_frames = len(frames)
+            
+            if job.total_frames == 0:
+                raise Exception("No frames extracted from video")
+            
+            output_dir = TEMP_DIR / f"{job.job_id}_output"
+            output_dir.mkdir(exist_ok=True)
+            
+            manifest = {
+                "fps": fps,
+                "frames": []
+            }
+            
+            # 2. Convert each frame
+            for i, frame_path in enumerate(frames):
+                job.current_frame = i + 1
+                job.last_updated = time.time()
+                
+                # Output filename
+                base_name = frame_path.stem
+                out_splat = output_dir / f"{base_name}.splat"
+                
+                # Convert frame (Generate SPLAT directly to save speed/space for video)
+                # We use the preview-quality (stride 8) logic? Or user requested stride?
+                # User requested stride. But maybe we force SPLAT format.
+                
+                # We'll generate the requested stride SPLAT for playback
+                await run_in_threadpool(
+                    processor.convert,
+                    input_path=str(frame_path),
+                    output_path=str(out_splat),
+                    stride=stride,
+                    scale_factor=scale_factor,
+                    thickness_ratio=thickness,
+                    global_scale=global_scale,
+                    depth_min=depth_min,
+                    depth_max=depth_max,
+                    output_format="splat",
+                    force_erp=True
+                )
+                
+                manifest["frames"].append(f"{base_name}.splat")
+            
+            # Save manifest
+            import json
+            with open(output_dir / "manifest.json", "w") as f:
+                json.dump(manifest, f)
+            
+            job.frame_manifest = manifest["frames"]
+            
+            # 3. Zip result
+            await run_in_threadpool(
+                shutil.make_archive,
+                str(job.output_zip_path.with_suffix('')), # make_archive adds .zip
+                'zip',
+                output_dir
+            )
+            
+            # Store paths
+            job.output_splat_path = output_dir # Treat output path as the dir for preview serving
+            
+            job.status = "complete"
+            
+            # Cleanup input and frames
+            if job.input_path.exists(): job.input_path.unlink()
+            shutil.rmtree(frames_dir, ignore_errors=True)
+            # We keep output_dir for serving frames individually
+            
+    except Exception as e:
+        job.status = "error"
+        job.error = str(e)
+        job.last_updated = time.time()
+
+
 @app.get("/api/status/{job_id}")
 async def get_job_status(job_id: str):
     """Get job status and result."""
@@ -275,6 +446,14 @@ async def get_job_status(job_id: str):
     
     if job.status == "error":
         response["error"] = job.error
+
+    if job.is_video:
+        response["is_video"] = True
+        response["total_frames"] = job.total_frames
+        response["current_frame"] = job.current_frame
+        if job.status == "complete":
+             response["preview_manifest_url"] = f"/api/preview_video/{job_id}/manifest.json"
+             response["zip_url"] = f"/api/download_video/{job_id}"
     
     return JSONResponse(response)
 
@@ -343,6 +522,42 @@ async def download_file(job_id: str, format: str = "ply"):
         path,
         media_type="application/octet-stream",
         filename=filename
+    )
+
+
+@app.get("/api/preview_video/{job_id}/{filename}")
+async def get_video_frame(job_id: str, filename: str):
+    """Serve individual frames or manifest for video preview."""
+    if job_id not in jobs:
+        raise HTTPException(404, "Job not found")
+    
+    job = jobs[job_id]
+    if job.status != "complete":
+         raise HTTPException(400, "Job not complete")
+    
+    # job.output_splat_path serves as the directory for video frames
+    file_path = job.output_splat_path / filename
+    
+    if not file_path.exists():
+        raise HTTPException(404, "File not found")
+        
+    return FileResponse(file_path)
+
+
+@app.get("/api/download_video/{job_id}")
+async def download_video_zip(job_id: str):
+    """Download the full video sequence as ZIP."""
+    if job_id not in jobs:
+        raise HTTPException(404, "Job not found")
+    job = jobs[job_id]
+    
+    if not job.output_zip_path.exists():
+        raise HTTPException(404, "File not found")
+        
+    return FileResponse(
+        job.output_zip_path,
+        media_type="application/zip",
+        filename=f"spag4d_video_{job_id[:8]}.zip"
     )
 
 

@@ -103,7 +103,7 @@ class PanoViewer {
     onPointerMove(event) {
         if (!this.isUserInteracting) return;
 
-        this.lon = (this.onPointerDownX - event.clientX) * 0.1 + this.onPointerDownLon;
+        this.lon = (event.clientX - this.onPointerDownX) * 0.1 + this.onPointerDownLon;
         this.lat = (event.clientY - this.onPointerDownY) * 0.1 + this.onPointerDownLat;
         this.lat = Math.max(-85, Math.min(85, this.lat));
     }

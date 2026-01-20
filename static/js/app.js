@@ -23,6 +23,15 @@ class SPAG4DApp {
         this.progressText = document.getElementById('progress-text');
         this.gpuStatus = document.getElementById('gpu-status');
 
+        // Video Elements
+        this.downloadZipBtn = document.getElementById('download-zip-btn');
+        this.videoParams = document.getElementById('video-params');
+        this.fpsInput = document.getElementById('fps');
+        this.videoStartInput = document.getElementById('video-start');
+        this.videoDurationInput = document.getElementById('video-duration');
+        this.videoInfo = document.getElementById('video-info');
+        this.videoMetadata = document.getElementById('video-metadata');
+
         // Parameters
         this.strideSelect = document.getElementById('stride');
         this.scaleFactorInput = document.getElementById('scale-factor');
@@ -36,6 +45,7 @@ class SPAG4DApp {
         this.convertBtn.addEventListener('click', () => this.startConversion());
         this.downloadPlyBtn.addEventListener('click', () => this.downloadFile('ply'));
         this.downloadSplatBtn.addEventListener('click', () => this.downloadFile('splat'));
+        this.downloadZipBtn.addEventListener('click', () => this.downloadZip());
 
         // Reset View Button
         const resetBtn = document.getElementById('reset-view-btn');
@@ -160,6 +170,28 @@ class SPAG4DApp {
         this.convertBtn.disabled = false;
         this.downloadPlyBtn.disabled = true;
         this.downloadSplatBtn.disabled = true;
+        this.downloadZipBtn.style.display = 'none';
+
+        // Check if video
+        this.isVideo = file.type.startsWith('video/');
+        if (this.isVideo) {
+            console.log('[App] Video detected');
+            this.videoParams.style.display = 'flex';
+            this.videoInfo.style.display = 'flex';
+            this.downloadSplatBtn.style.display = 'none';
+            this.downloadPlyBtn.style.display = 'none';
+            this.downloadZipBtn.style.display = 'flex';
+            this.downloadZipBtn.disabled = true;
+            this.extractVideoMetadata(file);
+        } else {
+            this.videoParams.style.display = 'none';
+            this.videoInfo.style.display = 'none';
+            this.downloadSplatBtn.style.display = 'flex';
+            this.downloadPlyBtn.style.display = 'flex';
+            this.downloadZipBtn.style.display = 'none';
+        }
+
+        // Load into 360 viewer
 
         // Load into 360 viewer
         if (this.panoViewer) {
@@ -207,7 +239,17 @@ class SPAG4DApp {
         });
 
         try {
-            const response = await fetch(`/api/convert?${params}`, {
+            let url = '/api/convert';
+            if (this.isVideo) {
+                url = '/api/convert_video';
+                params.append('fps', this.fpsInput.value);
+                params.append('start_time', this.videoStartInput.value);
+                if (this.videoDurationInput.value) {
+                    params.append('duration', this.videoDurationInput.value);
+                }
+            }
+
+            const response = await fetch(`${url}?${params}`, {
                 method: 'POST',
                 body: formData
             });
@@ -257,18 +299,33 @@ class SPAG4DApp {
                 this.setStatus('Waiting...', `Queue position: ${status.queue_position}`);
 
             } else if (status.status === 'processing') {
-                this.setStatus('Processing...', 'GPU active');
+                if (status.is_video) {
+                    this.setStatus('Processing Video...', `Frame ${status.current_frame} / ${status.total_frames}`);
+                } else {
+                    this.setStatus('Processing...', 'GPU active');
+                }
 
             } else if (status.status === 'complete') {
                 clearInterval(this.pollInterval);
                 this.pollInterval = null;
 
                 this.setStatus('Complete!',
-                    `${status.splat_count.toLocaleString()} splats • ${status.file_size_mb} MB • ${status.processing_time}s`
+                    this.isVideo
+                        ? `${status.total_frames} frames • ${status.total_frames} splats`
+                        : `${status.splat_count.toLocaleString()} splats • ${status.file_size_mb} MB • ${status.processing_time}s`
                 );
 
-                this.downloadPlyBtn.disabled = false;
-                this.downloadSplatBtn.disabled = false;
+                if (this.isVideo) {
+                    this.downloadZipBtn.disabled = false;
+                    this.zipUrl = status.zip_url;
+
+                    if (status.preview_manifest_url && this.splatViewer) {
+                        this.splatViewer.loadVideo(status.preview_manifest_url);
+                    }
+                } else {
+                    this.downloadPlyBtn.disabled = false;
+                    this.downloadSplatBtn.disabled = false;
+                }
 
                 // Enable quality select
                 const qualitySelect = document.getElementById('splat-quality');
@@ -322,6 +379,14 @@ class SPAG4DApp {
         link.click();
     }
 
+    downloadZip() {
+        if (!this.zipUrl) return;
+        const link = document.createElement('a');
+        link.href = this.zipUrl;
+        link.download = `spag4d_video_${this.currentJobId.slice(0, 8)}.zip`;
+        link.click();
+    }
+
     async checkHealth() {
         try {
             const response = await fetch('/api/health');
@@ -343,6 +408,69 @@ class SPAG4DApp {
     setStatus(text, progress = '') {
         this.statusText.textContent = text;
         this.progressText.textContent = progress;
+    }
+
+    extractVideoMetadata(file) {
+        if (!this.videoMetadata) return;
+        this.videoMetadata.textContent = 'Analyzing...';
+
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.onloadedmetadata = () => {
+            const width = video.videoWidth;
+            const height = video.videoHeight;
+            const duration = video.duration;
+            let fps = 30; // Default fallback
+
+            // Attempt to detect FPS via MediaStreamTrack settings
+            try {
+                // captureStream() is not standard but widely supported in Chrome/Firefox
+                if (video.captureStream) {
+                    const stream = video.captureStream();
+                    const tracks = stream.getVideoTracks();
+                    if (tracks.length > 0) {
+                        const settings = tracks[0].getSettings();
+                        if (settings.frameRate) {
+                            fps = settings.frameRate;
+                            console.log('[App] Detected FPS:', fps);
+                            if (this.fpsInput) this.fpsInput.value = Math.round(fps);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('[App] Could not detect FPS via captureStream', e);
+            }
+
+            // Reset time inputs
+            if (this.videoStartInput) {
+                this.videoStartInput.value = "0.0";
+                this.videoStartInput.max = duration;
+            }
+            if (this.videoDurationInput) {
+                this.videoDurationInput.value = "";
+                this.videoDurationInput.placeholder = "All";
+                this.videoDurationInput.max = duration;
+            }
+
+            const durationStr = duration < 60
+                ? `${duration.toFixed(1)}s`
+                : `${Math.floor(duration / 60)}m ${(duration % 60).toFixed(0)}s`;
+
+            this.videoMetadata.innerHTML = `
+                <span>${width}x${height}</span> • 
+                <span>${durationStr}</span> • 
+                <span>${Math.round(fps)} FPS</span>
+             `;
+
+            // Cleanup
+            window.URL.revokeObjectURL(video.src);
+        };
+
+        video.onerror = () => {
+            this.videoMetadata.textContent = 'Could not read metadata';
+        };
+
+        video.src = URL.createObjectURL(file);
     }
 }
 

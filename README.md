@@ -8,6 +8,7 @@ Convert 360° equirectangular panoramas into viewable 3D Gaussian Splat files.
 ## Features
 
 - **Native 360° Depth Estimation** - Uses DAP (Depth Any Panoramas) for equirectangular-aware depth
+- **360° Video Support** - Convert video sequences with frame extraction and trimming
 - **Metric Depth Output** - Real-world scale with manual adjustment option
 - **Standard 3DGS PLY Output** - Compatible with gsplat, SuperSplat, SHARP viewers
 - **Compressed SPLAT Format** - ~8x smaller for web delivery
@@ -63,6 +64,9 @@ python -m spag4d.cli convert panorama.jpg output.ply \
 
 # Batch processing
 python -m spag4d.cli convert ./input/ ./output/ --batch
+
+# Video conversion (automatic frame extraction)
+python -m spag4d.cli convert_video input.mp4 output_dir --fps 10 --start 0.0 --duration 5.0
 ```
 
 ### Python API
@@ -92,6 +96,14 @@ print(f"Generated {result.splat_count:,} Gaussians")
 | `global_scale` | 1.0 | Depth scale correction |
 | `depth_min` | 0.1 | Minimum depth (meters) |
 | `depth_max` | 100.0 | Maximum depth (meters) |
+
+### Video Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `fps` | 10 | Frames per second to extract |
+| `start_time` | 0.0 | Start time in seconds |
+| `duration` | None | Duration in seconds (optional) |
 
 ## Output Formats
 

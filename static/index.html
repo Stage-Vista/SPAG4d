@@ -81,7 +81,7 @@
                         <span class="btn-icon">📁</span>
                         Upload
                     </label>
-                    <input type="file" id="file-input" accept="image/*" hidden>
+                    <input type="file" id="file-input" accept="image/*,video/*" hidden>
 
                     <span id="filename" class="filename">No file selected</span>
 
@@ -99,6 +99,13 @@
                         <span class="btn-icon">💾</span>
                         SPLAT
                     </button>
+
+                    <button id="download-zip-btn" class="action-btn" style="display: none;" disabled>
+                        <span class="btn-icon">📦</span>
+                        Sequence
+                    </button>
+
+
                 </div>
 
                 <!-- Parameters -->
@@ -142,6 +149,32 @@
                             <input type="number" id="depth-max" value="100" min="10" max="1000" step="10"
                                 title="Maximum depth">
                         </div>
+                    </div>
+                </div>
+
+                <!-- Video Parameters (Hidden by default) -->
+                <div class="params-row" id="video-params"
+                    style="display: none; margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;">
+                    <div class="param-group" title="Frames Per Second to extract. Higher = smoother but slower.">
+                        <label for="fps">FPS</label>
+                        <input type="number" id="fps" value="10" min="1" max="60" step="1">
+                    </div>
+                    <div class="param-group" title="Start time in seconds">
+                        <label for="video-start">Start (s)</label>
+                        <input type="number" id="video-start" value="0.0" min="0" step="0.1" style="width: 60px;">
+                    </div>
+                    <div class="param-group" title="Duration in seconds. Leave empty for full video.">
+                        <label for="video-duration">Duration (s)</label>
+                        <input type="number" id="video-duration" value="" min="0.1" step="0.1" placeholder="All"
+                            style="width: 60px;">
+                    </div>
+                    <div class="param-group" style="flex: 2; align-items: flex-start; justify-content: center;">
+                        <span class="panel-hint">Video Mode: 4D Output</span>
+                    </div>
+                </div>
+                <div class="params-row" id="video-info" style="display: none; padding-top: 0; min-height: 0;">
+                    <div class="param-group" style="width: 100%; text-align: center; color: #aaa; font-size: 0.85em;">
+                        <span id="video-metadata">Detected: -</span>
                     </div>
                 </div>
             </div>
