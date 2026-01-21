@@ -62,7 +62,9 @@ class SplatViewer {
         window.addEventListener('keydown', (e) => this.onKeyDown(e));
         window.addEventListener('keyup', (e) => this.onKeyUp(e));
 
-        window.addEventListener('resize', () => this.onResize());
+        // Use ResizeObserver for robust layout handling
+        this.resizeObserver = new ResizeObserver(() => this.onResize());
+        this.resizeObserver.observe(this.container);
 
         this.onResize();
     }

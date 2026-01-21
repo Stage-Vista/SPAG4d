@@ -54,7 +54,9 @@ class PanoViewer {
         this.container.addEventListener('pointerup', () => this.onPointerUp());
         this.container.addEventListener('wheel', (e) => this.onWheel(e));
 
-        window.addEventListener('resize', () => this.onResize());
+        // Use ResizeObserver for robust layout handling
+        this.resizeObserver = new ResizeObserver(() => this.onResize());
+        this.resizeObserver.observe(this.container);
 
         // Start render loop
         this.animate();
