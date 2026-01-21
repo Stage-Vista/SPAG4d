@@ -255,6 +255,12 @@ class DAPModel:
             if mask is not None:
                 mask = mask.squeeze(0)
         
+        # Ensure output is tensor
+        if not isinstance(depth, torch.Tensor):
+            depth = torch.from_numpy(depth).to(self.device)
+        if mask is not None and not isinstance(mask, torch.Tensor):
+            mask = torch.from_numpy(mask).to(self.device)
+            
         return depth, mask
 
 

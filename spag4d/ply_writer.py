@@ -28,12 +28,20 @@ def save_ply_gsplat(
         path: Output PLY file path
         sh_degree: SH degree (0 = DC only, 3 = full)
     """
+    # Helper to ensure numpy
+    def to_numpy(x):
+        if isinstance(x, np.ndarray):
+            return x
+        if hasattr(x, 'cpu'):
+            return x.cpu().numpy()
+        return np.array(x)
+
     # Move to CPU numpy
-    means = gaussians['means'].cpu().numpy()
-    scales = gaussians['scales'].cpu().numpy()
-    quats = gaussians['quats'].cpu().numpy()      # XYZW order internally
-    colors = gaussians['colors'].cpu().numpy()
-    opacities = gaussians['opacities'].cpu().numpy()
+    means = to_numpy(gaussians['means'])
+    scales = to_numpy(gaussians['scales'])
+    quats = to_numpy(gaussians['quats'])      # XYZW order internally
+    colors = to_numpy(gaussians['colors'])
+    opacities = to_numpy(gaussians['opacities'])
     
     N = means.shape[0]
     if N == 0:
@@ -45,7 +53,7 @@ def save_ply_gsplat(
     # handles camera vs world separately.
     # We pass through raw coordinates now that internal grid is fixed.
     # ─────────────────────────────────────────────────────────────────
-    means_out = means.cpu().numpy()
+    means_out = means
     
     # Quaternions are already in correct orientation relative to means
     quats_out = quats
