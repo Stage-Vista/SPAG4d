@@ -40,18 +40,16 @@ def save_ply_gsplat(
         raise ValueError("No valid Gaussians to save")
     
     # ─────────────────────────────────────────────────────────────────
-    # Coordinate Transform: Y-up → OpenCV (Y-down, Z-forward)
-    # This is 180° rotation about X-axis
+    # Coordinate Transform: 
+    # Internal is Y-up. Output format (gsplat) often expects Y-up or 
+    # handles camera vs world separately.
+    # We pass through raw coordinates now that internal grid is fixed.
     # ─────────────────────────────────────────────────────────────────
-    means_out = means.copy()
-    means_out[:, 1] *= -1  # Flip Y
-    means_out[:, 2] *= -1  # Flip Z
+    means_out = means.cpu().numpy()
     
-    # Rotate quaternions by 180° about X: q' = q_x180 * q
-    # q_x180 = [1, 0, 0, 0] in XYZW format (i.e., 90° about X... wait)
-    # Actually 180° about X in XYZW is [1, 0, 0, 0] where X=1, W=0
-    # Quaternion for 180° about X: q = (sin(90°), 0, 0, cos(90°)) = (1, 0, 0, 0) in XYZW
-    quats_out = _quat_multiply(np.array([1., 0., 0., 0.]), quats)
+    # Quaternions are already in correct orientation relative to means
+    quats_out = quats
+
     
     # ─────────────────────────────────────────────────────────────────
     # Encode for PLY storage
