@@ -128,7 +128,7 @@ class SPAG4D:
         
         # Estimate depth with DAP
         with torch.inference_mode():
-            depth = self.dap.predict(image_tensor)
+            depth, validity_mask = self.dap.predict(image_tensor)
         
         # Save depth preview if requested
         if depth_preview_path:
@@ -158,10 +158,12 @@ class SPAG4D:
         # Apply global scale correction
         depth = depth * global_scale
         
-        # Apply sky threshold
-        if sky_threshold > 0:
-            sky_mask = depth > sky_threshold
-            depth[sky_mask] = 0  # Will be filtered by validity mask
+        # Apply sky threshold as fallback (if model doesn't provide mask)
+        if validity_mask is None and sky_threshold > 0:
+            validity_mask = (depth <= sky_threshold).float()
+        elif sky_threshold > 0:
+            # Combine learned mask with sky threshold
+            validity_mask = validity_mask * (depth <= sky_threshold).float()
         
         # Convert to Gaussians
         gaussians = equirect_to_gaussians(
@@ -171,7 +173,8 @@ class SPAG4D:
             scale_factor=scale_factor,
             thickness_ratio=thickness_ratio,
             depth_min=depth_min,
-            depth_max=depth_max
+            depth_max=depth_max,
+            validity_mask=validity_mask
         )
         
         # Save output

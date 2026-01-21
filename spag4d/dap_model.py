@@ -162,56 +162,100 @@ class DAPModel:
         return sha256.hexdigest() == DAP_CONFIG["sha256"]
     
     @torch.inference_mode()
-    def predict(self, image: torch.Tensor) -> torch.Tensor:
+    def predict(
+        self, 
+        image: torch.Tensor,
+        return_mask: bool = False  # Disabled: DAP mask head outputs near-zero values
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
-        Predict metric depth from equirectangular image.
+        Predict metric depth from equirectangular image(s).
         
         Args:
-            image: RGB image tensor [H, W, 3] uint8 or [0,1] float
+            image: RGB image tensor [H, W, 3] or batch [B, H, W, 3] uint8 or [0,1] float
+            return_mask: Whether to return validity mask
         
         Returns:
-            Depth map [H, W] in meters
+            Tuple of (depth, mask):
+                - depth: [H, W] or [B, H, W] in meters
+                - mask: [H, W] or [B, H, W] validity mask (0-1), or None if return_mask=False
         """
         import torch.nn.functional as F
         
-        H, W = image.shape[:2]
+        # Handle batched vs single input
+        is_batched = image.dim() == 4
+        if not is_batched:
+            image = image.unsqueeze(0)  # [1, H, W, 3]
+        
+        B, H, W, C = image.shape
         
         # Preprocess
         if image.dtype == torch.uint8:
             image = image.float() / 255.0
         
         # DAP expects [B, C, H, W] normalized with ImageNet stats
-        x = image.permute(2, 0, 1).unsqueeze(0)
+        x = image.permute(0, 3, 1, 2)  # [B, 3, H, W]
         
         mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
         std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
         x = (x - mean) / std
         
-        # Run model - DAP returns a dict with 'pred_depth'
-        output = self.model(x)
+        # Run model with OOM fallback
+        try:
+            output = self.model(x)
+        except torch.cuda.OutOfMemoryError:
+            # Fallback: process one at a time
+            torch.cuda.empty_cache()
+            depths = []
+            masks = []
+            for i in range(B):
+                out_i = self.model(x[i:i+1])
+                if isinstance(out_i, dict):
+                    depths.append(out_i['pred_depth'])
+                    if return_mask and 'pred_mask' in out_i:
+                        masks.append(out_i['pred_mask'])
+                else:
+                    depths.append(out_i)
+            depth = torch.cat(depths, dim=0)
+            mask = torch.cat(masks, dim=0) if masks else None
+            output = {'pred_depth': depth, 'pred_mask': mask}
         
         # Handle different output formats
         if isinstance(output, dict):
             depth = output['pred_depth']
+            mask = output.get('pred_mask', None) if return_mask else None
         else:
             depth = output
+            mask = None
         
-        # Remove batch/channel dims if present
+        # Remove channel dim if present [B, 1, H, W] -> [B, H, W]
         if depth.dim() == 4:
-            depth = depth.squeeze(0).squeeze(0)
-        elif depth.dim() == 3:
-            depth = depth.squeeze(0)
+            depth = depth.squeeze(1)
+        if mask is not None and mask.dim() == 4:
+            mask = mask.squeeze(1)
         
         # Interpolate to original resolution if needed
-        if depth.shape[0] != H or depth.shape[1] != W:
+        if depth.shape[-2] != H or depth.shape[-1] != W:
             depth = F.interpolate(
-                depth.unsqueeze(0).unsqueeze(0),
+                depth.unsqueeze(1),
                 size=(H, W),
                 mode='bilinear',
                 align_corners=True
-            ).squeeze(0).squeeze(0)
+            ).squeeze(1)
+            if mask is not None:
+                mask = F.interpolate(
+                    mask.unsqueeze(1),
+                    size=(H, W),
+                    mode='bilinear',
+                    align_corners=True
+                ).squeeze(1)
         
-        return depth
+        # Remove batch dim for single image input
+        if not is_batched:
+            depth = depth.squeeze(0)
+            if mask is not None:
+                mask = mask.squeeze(0)
+        
+        return depth, mask
 
 
 class MockDAPModel(DAPModel):
@@ -230,21 +274,41 @@ class MockDAPModel(DAPModel):
         return cls(device)
     
     @torch.inference_mode()
-    def predict(self, image: torch.Tensor) -> torch.Tensor:
+    def predict(
+        self, 
+        image: torch.Tensor,
+        return_mask: bool = True
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Return synthetic depth based on image brightness."""
-        H, W = image.shape[:2]
+        # Handle batched vs single input
+        is_batched = image.dim() == 4
+        if not is_batched:
+            image = image.unsqueeze(0)  # [1, H, W, 3]
+        
+        B, H, W, C = image.shape
         
         if image.dtype == torch.uint8:
             image = image.float() / 255.0
         
         # Base depth: 5 meters
-        depth = torch.ones(H, W, device=self.device) * 5.0
+        depth = torch.ones(B, H, W, device=self.device) * 5.0
         
         # Add variation based on brightness (brighter = farther)
-        brightness = image.mean(dim=-1)
+        brightness = image.mean(dim=-1)  # [B, H, W]
         depth = depth + brightness * 10.0
         
         # Add some noise
-        depth = depth + torch.randn(H, W, device=self.device) * 0.3
+        depth = depth + torch.randn(B, H, W, device=self.device) * 0.3
+        depth = depth.clamp(min=0.1)
         
-        return depth.clamp(min=0.1)
+        # Mock mask: everything valid except very bright areas (simulated sky)
+        mask = (brightness < 0.9).float() if return_mask else None
+        
+        # Remove batch dim for single image input
+        if not is_batched:
+            depth = depth.squeeze(0)
+            if mask is not None:
+                mask = mask.squeeze(0)
+        
+        return depth, mask
+

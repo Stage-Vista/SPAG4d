@@ -29,6 +29,8 @@ class SPAG4DApp {
         this.fpsInput = document.getElementById('fps');
         this.videoStartInput = document.getElementById('video-start');
         this.videoDurationInput = document.getElementById('video-duration');
+        this.temporalAlphaInput = document.getElementById('temporal-alpha');
+        this.stabilizeVideoInput = document.getElementById('stabilize-video');
         this.videoInfo = document.getElementById('video-info');
         this.videoMetadata = document.getElementById('video-metadata');
 
@@ -60,6 +62,16 @@ class SPAG4DApp {
         if (orbitBtn) {
             orbitBtn.addEventListener('click', () => {
                 if (this.splatViewer) this.splatViewer.setOutsideView();
+            });
+        }
+
+        // Help Toggle Button
+        const helpBtn = document.getElementById('help-toggle');
+        const helpPanel = document.getElementById('help-panel');
+        if (helpBtn && helpPanel) {
+            helpBtn.addEventListener('click', () => {
+                helpPanel.classList.toggle('visible');
+                helpBtn.textContent = helpPanel.classList.contains('visible') ? '✕ Close' : '? Help';
             });
         }
 
@@ -244,6 +256,8 @@ class SPAG4DApp {
                 url = '/api/convert_video';
                 params.append('fps', this.fpsInput.value);
                 params.append('start_time', this.videoStartInput.value);
+                params.append('temporal_alpha', this.temporalAlphaInput.value);
+                params.append('stabilize_video', this.stabilizeVideoInput.checked);
                 if (this.videoDurationInput.value) {
                     params.append('duration', this.videoDurationInput.value);
                 }

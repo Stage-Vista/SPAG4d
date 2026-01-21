@@ -22,7 +22,8 @@ def equirect_to_gaussians(
     depth_min: float = 0.1,
     depth_max: float = 100.0,
     pole_rows: int = 3,
-    default_opacity: float = 0.95
+    default_opacity: float = 0.95,
+    validity_mask: Optional[torch.Tensor] = None
 ) -> dict:
     """
     Convert equirectangular panorama with depth to 3D Gaussians.
@@ -37,6 +38,7 @@ def equirect_to_gaussians(
         depth_max: Maximum valid depth
         pole_rows: Rows to exclude at top/bottom poles
         default_opacity: Opacity for all Gaussians
+        validity_mask: Optional [H, W] mask from depth model (0-1 or bool)
     
     Returns:
         Dict with:
@@ -66,10 +68,23 @@ def equirect_to_gaussians(
     if depth.shape[0] != H_grid or depth.shape[1] != W_grid:
         depth = depth[stride//2::stride, stride//2::stride]
     
+    # Downsample validity_mask to match grid if provided
+    if validity_mask is not None:
+        if validity_mask.shape[0] != H_grid or validity_mask.shape[1] != W_grid:
+            validity_mask = validity_mask[stride//2::stride, stride//2::stride]
+    
     # ─────────────────────────────────────────────────────────────────
     # Validity Mask
     # ─────────────────────────────────────────────────────────────────
     valid_mask = (depth > depth_min) & (depth < depth_max)
+    
+    # Apply learned validity mask if provided
+    if validity_mask is not None:
+        # Convert to bool if float (threshold at 0.5)
+        if validity_mask.dtype == torch.float32 or validity_mask.dtype == torch.float16:
+            valid_mask = valid_mask & (validity_mask > 0.5)
+        else:
+            valid_mask = valid_mask & validity_mask.bool()
     
     # Exclude poles
     if pole_rows > 0:

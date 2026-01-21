@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import zipfile
 import subprocess
+import cv2
 from typing import Optional, List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
@@ -200,7 +201,9 @@ async def convert_video(
     depth_min: float = Query(0.1, ge=0.01),
     depth_max: float = Query(100.0, le=1000.0),
     start_time: float = Query(0.0, ge=0.0),
-    duration: Optional[float] = Query(None, gt=0.0)
+    duration: Optional[float] = Query(None, gt=0.0),
+    temporal_alpha: float = Query(0.3, ge=0.0, le=1.0),
+    stabilize_video: bool = Query(False)
 ):
     """Convert uploaded 360 video to sequence of Gaussian splats."""
     content = await file.read()
@@ -222,7 +225,7 @@ async def convert_video(
     
     asyncio.create_task(process_video_job(
         job, fps, stride, scale_factor, thickness, global_scale, depth_min, depth_max,
-        start_time, duration
+        start_time, duration, temporal_alpha, stabilize_video
     ))
     
     return JSONResponse({
@@ -309,10 +312,24 @@ async def process_video_job(
     depth_min: float,
     depth_max: float,
     start_time: float = 0.0,
-    duration: Optional[float] = None
+    duration: Optional[float] = None,
+    temporal_alpha: float = 0.7,  # EMA smoothing factor (0 = off, 1 = max smooth)
+    stabilize_video: bool = False,  # Enable visual odometry stabilization
 ):
-    """Process video conversion logic."""
+    """Process video conversion with batched inference, temporal smoothing, and stabilization."""
     global processor
+    
+    import torch
+    import numpy as np
+    from PIL import Image
+    
+    BATCH_SIZE = 4  # Process 4 frames at a time
+    
+    # Initialize visual odometry if stabilization enabled
+    vo = None
+    if stabilize_video:
+        from spag4d.visual_odometry import SphericalVisualOdometry, transform_gaussians
+        vo = SphericalVisualOdometry(n_features=1000)
     
     try:
         job.status = "queued"
@@ -326,13 +343,10 @@ async def process_video_job(
             
             # Run ffmpeg to extract frames
             cmd = ['ffmpeg']
-            
-            # Seeking
             if start_time > 0:
                 cmd.extend(['-ss', str(start_time)])
             if duration:
                 cmd.extend(['-t', str(duration)])
-                
             cmd.extend([
                 '-i', str(job.input_path),
                 '-vf', f'fps={fps}',
@@ -340,7 +354,6 @@ async def process_video_job(
                 str(frames_dir / 'frame_%05d.jpg')
             ])
             
-            # Run ffmpeg in thread pool
             await run_in_threadpool(subprocess.run, cmd, check=True, capture_output=True)
             
             frames = sorted(list(frames_dir.glob('frame_*.jpg')))
@@ -352,38 +365,110 @@ async def process_video_job(
             output_dir = TEMP_DIR / f"{job.job_id}_output"
             output_dir.mkdir(exist_ok=True)
             
-            manifest = {
-                "fps": fps,
-                "frames": []
-            }
+            # ─────────────────────────────────────────────────────────────
+            # PASS 1: Batched Depth Inference
+            # ─────────────────────────────────────────────────────────────
+            depths = []
+            masks = []
             
-            # 2. Convert each frame
+            for batch_start in range(0, len(frames), BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, len(frames))
+                batch_frames = frames[batch_start:batch_end]
+                
+                # Load batch of images
+                batch_tensors = []
+                for frame_path in batch_frames:
+                    img = Image.open(frame_path).convert('RGB')
+                    img_np = np.array(img)
+                    img_tensor = torch.from_numpy(img_np).to(processor.device)
+                    batch_tensors.append(img_tensor)
+                
+                # Stack into batch [B, H, W, 3]
+                batch = torch.stack(batch_tensors, dim=0)
+                
+                # Run batched inference
+                with torch.inference_mode():
+                    depth_batch, mask_batch = await run_in_threadpool(
+                        processor.dap.predict, batch
+                    )
+                
+                # Store results (move to CPU to save VRAM)
+                for i in range(depth_batch.shape[0]):
+                    depths.append(depth_batch[i].cpu())
+                    if mask_batch is not None:
+                        masks.append(mask_batch[i].cpu())
+                
+                job.current_frame = batch_end
+                job.last_updated = time.time()
+            
+            # ─────────────────────────────────────────────────────────────
+            # PASS 2: Temporal Smoothing + Conversion
+            # ─────────────────────────────────────────────────────────────
+            manifest = {"fps": fps, "frames": []}
+            prev_depth = None
+            
+            # Calculate effective alpha (0 = no smoothing, higher = more smoothing)
+            # Invert for EMA: alpha=0.7 means 70% new frame, 30% previous
+            ema_alpha = 1.0 - temporal_alpha if temporal_alpha > 0 else 1.0
+            
             for i, frame_path in enumerate(frames):
                 job.current_frame = i + 1
                 job.last_updated = time.time()
                 
-                # Output filename
-                base_name = frame_path.stem
-                out_splat = output_dir / f"{base_name}.splat"
+                # Get depth (move back to GPU)
+                depth = depths[i].to(processor.device)
+                mask = masks[i].to(processor.device) if masks else None
                 
-                # Convert frame (Generate SPLAT directly to save speed/space for video)
-                # We use the preview-quality (stride 8) logic? Or user requested stride?
-                # User requested stride. But maybe we force SPLAT format.
+                # Apply temporal smoothing (EMA)
+                if prev_depth is not None and temporal_alpha > 0:
+                    depth = ema_alpha * depth + (1 - ema_alpha) * prev_depth
+                prev_depth = depth.clone()
                 
-                # We'll generate the requested stride SPLAT for playback
-                await run_in_threadpool(
-                    processor.convert,
-                    input_path=str(frame_path),
-                    output_path=str(out_splat),
-                    stride=stride,
+                # Apply global scale
+                depth = depth * global_scale
+                
+                # Skip DAP mask for now - let gaussian_converter handle depth range filtering
+                validity_mask = None
+                
+                # Load image for conversion
+                img = Image.open(frame_path).convert('RGB')
+                img_tensor = torch.from_numpy(np.array(img)).to(processor.device)
+                
+                # Create spherical grid
+                H, W = img_tensor.shape[:2]
+                from spag4d.spherical_grid import create_spherical_grid
+                grid = create_spherical_grid(H, W, processor.device, stride=stride)
+                
+                # Convert to gaussians
+                from spag4d.gaussian_converter import equirect_to_gaussians
+                from spag4d.splat_writer import save_splat
+                
+                gaussians = equirect_to_gaussians(
+                    image=img_tensor,
+                    depth=depth,
+                    grid=grid,
                     scale_factor=scale_factor,
                     thickness_ratio=thickness,
-                    global_scale=global_scale,
                     depth_min=depth_min,
                     depth_max=depth_max,
-                    output_format="splat",
-                    force_erp=True
+                    validity_mask=validity_mask
                 )
+                
+                # Apply stabilization if enabled
+                if vo is not None:
+                    # Process frame for visual odometry
+                    img_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                    vo.process_frame(img_bgr)
+                    
+                    # Get stabilization rotation and transform gaussians
+                    R_stab = vo.get_stabilization_rotation()
+                    from spag4d.visual_odometry import transform_gaussians
+                    gaussians = transform_gaussians(gaussians, R_stab)
+                
+                # Save splat
+                base_name = frame_path.stem
+                out_splat = output_dir / f"{base_name}.splat"
+                await run_in_threadpool(save_splat, gaussians, str(out_splat))
                 
                 manifest["frames"].append(f"{base_name}.splat")
             
@@ -397,20 +482,18 @@ async def process_video_job(
             # 3. Zip result
             await run_in_threadpool(
                 shutil.make_archive,
-                str(job.output_zip_path.with_suffix('')), # make_archive adds .zip
+                str(job.output_zip_path.with_suffix('')),
                 'zip',
                 output_dir
             )
             
-            # Store paths
-            job.output_splat_path = output_dir # Treat output path as the dir for preview serving
-            
+            job.output_splat_path = output_dir
             job.status = "complete"
             
-            # Cleanup input and frames
-            if job.input_path.exists(): job.input_path.unlink()
+            # Cleanup
+            if job.input_path.exists():
+                job.input_path.unlink()
             shutil.rmtree(frames_dir, ignore_errors=True)
-            # We keep output_dir for serving frames individually
             
     except Exception as e:
         job.status = "error"

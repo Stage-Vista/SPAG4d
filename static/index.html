@@ -21,6 +21,7 @@
             </div>
             <div class="header-right">
                 <span class="tagline">360° Panorama to Gaussian Splat</span>
+                <button id="help-toggle" class="help-btn">? Help</button>
             </div>
         </header>
 
@@ -71,7 +72,25 @@
                 </div>
             </div>
 
-
+            <!-- Help Panel (Hidden by default) -->
+            <div id="help-panel" class="help-panel">
+                <h3>📋 Quick Start Workflow</h3>
+                <ol>
+                    <li><strong>Upload</strong> a 360° equirectangular image (JPG/PNG) or video (MP4)</li>
+                    <li><strong>Adjust Parameters:</strong>
+                        <em>Stride</em> (1=max quality, 8=fast preview),
+                        <em>Scale</em> (splat size),
+                        <em>Depth Range</em> (clip distant objects)
+                    </li>
+                    <li>Click <strong>Convert</strong> to generate the 3D Gaussian Splat</li>
+                    <li><strong>Preview</strong> the result in the 3DGS viewer (drag to rotate, scroll to zoom)</li>
+                    <li><strong>Download</strong> as PLY (for editors) or SPLAT (for web viewers)</li>
+                </ol>
+                <div class="tip">
+                    💡 <strong>Video Mode:</strong> Use FPS to control extraction rate, Smoothing to reduce flicker,
+                    and Stabilize to compensate for camera rotation.
+                </div>
+            </div>
 
             <!-- Controls -->
             <div class="controls-panel">
@@ -168,7 +187,17 @@
                         <input type="number" id="video-duration" value="" min="0.1" step="0.1" placeholder="All"
                             style="width: 60px;">
                     </div>
-                    <div class="param-group" style="flex: 2; align-items: flex-start; justify-content: center;">
+                    <div class="param-group"
+                        title="Temporal smoothing strength. 0 = off, higher = smoother (may cause ghosting).">
+                        <label for="temporal-alpha">Smoothing</label>
+                        <input type="range" id="temporal-alpha" value="0.3" min="0" max="0.8" step="0.1"
+                            style="width: 60px;">
+                    </div>
+                    <div class="param-group" title="Stabilize camera rotation using visual odometry.">
+                        <label for="stabilize-video">Stabilize</label>
+                        <input type="checkbox" id="stabilize-video" style="width: 18px; height: 18px;">
+                    </div>
+                    <div class="param-group" style="flex: 1; align-items: flex-start; justify-content: center;">
                         <span class="panel-hint">Video Mode: 4D Output</span>
                     </div>
                 </div>
