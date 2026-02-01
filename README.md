@@ -92,9 +92,13 @@ pip install -e ".[all]"
 
 ### 5) Optional: Magic Fix (SHARP)
 
-If you installed the standard version and want SHARP later:
+**ml-sharp is not on PyPI** — you must install it manually from GitHub:
 
 ```bash
+# Step 1: Install ml-sharp from GitHub
+pip install git+https://github.com/apple/ml-sharp.git
+
+# Step 2: (Optional) Install the sharp extra for documentation/metadata
 pip install -e ".[sharp]"
 ```
 
