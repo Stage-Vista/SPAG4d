@@ -292,12 +292,32 @@ async def process_job(
         async with gpu_semaphore:
             job.status = "processing"
             
+            # Auto-adjust stride for high-resolution images to prevent OOM
+            from PIL import Image
+            with Image.open(job.input_path) as img:
+                width, height = img.size
+            
+            effective_stride = stride
+            if width > 6000:
+                # 6K+ images: force stride 8
+                effective_stride = max(stride, 8)
+                print(f"⚠️ High-res image ({width}x{height}), using stride={effective_stride} to prevent OOM")
+            elif width > 4096:
+                # 4K-6K images: minimum stride 4
+                effective_stride = max(stride, 4)
+                print(f"⚠️ Large image ({width}x{height}), using stride={effective_stride} to prevent OOM")
+            
+            # Store adjusted stride in params for user feedback
+            if effective_stride != stride:
+                job.params["adjusted_stride"] = effective_stride
+                job.params["original_stride"] = stride
+            
             # Run heavy computation in thread pool (doesn't block event loop)
             result = await run_in_threadpool(
                 processor.convert,
                 input_path=str(job.input_path),
                 output_path=str(job.output_ply_path),
-                stride=stride,
+                stride=effective_stride,
                 scale_factor=scale_factor,
                 thickness_ratio=thickness,
                 global_scale=global_scale,

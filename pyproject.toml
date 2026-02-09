@@ -34,6 +34,11 @@ dependencies = [
     "opencv-python>=4.8",
     "safetensors>=0.4.0",
     "einops>=0.6",
+    # DAP model dependencies
+    "torchmetrics>=1.0",
+    "termcolor>=2.0",
+    "omegaconf>=2.3",
+    "mmengine>=0.10",
 ]
 
 [project.optional-dependencies]
