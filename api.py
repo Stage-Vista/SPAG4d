@@ -234,7 +234,9 @@ async def convert_video(
     start_time: float = Query(0.0, ge=0.0),
     duration: Optional[float] = Query(None, gt=0.0),
     temporal_alpha: float = Query(0.3, ge=0.0, le=1.0),
-    stabilize_video: bool = Query(False)
+    stabilize_video: bool = Query(False),
+    scale_blend: float = Query(0.5, ge=0.0, le=1.0),
+    opacity_blend: float = Query(1.0, ge=0.0, le=1.0)
 ):
     """Convert uploaded 360 video to sequence of Gaussian splats."""
     content = await file.read()
@@ -257,7 +259,7 @@ async def convert_video(
     asyncio.create_task(process_video_job(
         job, fps, stride, scale_factor, thickness, global_scale, depth_min, depth_max,
         80.0, # Default sky threshold
-        start_time, duration, temporal_alpha, stabilize_video
+        start_time, duration, temporal_alpha, stabilize_video, scale_blend, opacity_blend
     ))
     
     return JSONResponse({
@@ -362,6 +364,8 @@ async def process_video_job(
     duration: Optional[float] = None,
     temporal_alpha: float = 0.7,  # EMA smoothing factor (0 = off, 1 = max smooth)
     stabilize_video: bool = False,  # Enable visual odometry stabilization
+    scale_blend: float = 0.5,
+    opacity_blend: float = 1.0,
 ):
     """Process video conversion with batched inference, temporal smoothing, and stabilization."""
     global processor
@@ -505,30 +509,36 @@ async def process_video_job(
                 # SHARP refinement with temporal smoothing
                 refined_attrs = None
                 if processor.sharp_refiner is not None:
-                    processor.sharp_refiner.load_model()  # no-op if already loaded
-                    img_float = img_tensor.float() / 255.0
-                    raw_attrs = processor.sharp_refiner.refine(img_float, depth)
+                    try:
+                        processor.sharp_refiner.load_model()  # no-op if already loaded
+                        img_float = img_tensor.float() / 255.0
+                        raw_attrs = processor.sharp_refiner.refine(img_float, depth)
+                    except Exception as e:
+                        import warnings
+                        warnings.warn(f"SHARP refinement failed: {e}. Falling back to geometric-only.")
+                        raw_attrs = None
 
-                    # Temporally smooth SHARP attributes (opacity, scale, color)
-                    ref_op = raw_attrs.opacities
-                    ref_sc = raw_attrs.scales
-                    ref_col = raw_attrs.colors
+                    if raw_attrs is not None:
+                        # Temporally smooth SHARP attributes (opacity, scale, color)
+                        ref_op = raw_attrs.opacities
+                        ref_sc = raw_attrs.scales
+                        ref_col = raw_attrs.colors
 
-                    if prev_ref_opacities is not None and temporal_alpha > 0:
-                        ref_op = ema_alpha * ref_op + (1 - ema_alpha) * prev_ref_opacities.to(processor.device)
-                        ref_sc = ema_alpha * ref_sc + (1 - ema_alpha) * prev_ref_scales.to(processor.device)
-                        if ref_col is not None and prev_ref_colors is not None:
-                            ref_col = ema_alpha * ref_col + (1 - ema_alpha) * prev_ref_colors.to(processor.device)
+                        if prev_ref_opacities is not None and temporal_alpha > 0:
+                            ref_op = ema_alpha * ref_op + (1 - ema_alpha) * prev_ref_opacities.to(processor.device)
+                            ref_sc = ema_alpha * ref_sc + (1 - ema_alpha) * prev_ref_scales.to(processor.device)
+                            if ref_col is not None and prev_ref_colors is not None:
+                                ref_col = ema_alpha * ref_col + (1 - ema_alpha) * prev_ref_colors.to(processor.device)
 
-                    prev_ref_opacities = ref_op.cpu().clone()
-                    prev_ref_scales = ref_sc.cpu().clone()
-                    if ref_col is not None:
-                        prev_ref_colors = ref_col.cpu().clone()
+                        prev_ref_opacities = ref_op.cpu().clone()
+                        prev_ref_scales = ref_sc.cpu().clone()
+                        if ref_col is not None:
+                            prev_ref_colors = ref_col.cpu().clone()
 
-                    from spag4d.sharp_refiner import RefinedAttributes
-                    refined_attrs = RefinedAttributes(
-                        opacities=ref_op, scales=ref_sc, colors=ref_col
-                    )
+                        from spag4d.sharp_refiner import RefinedAttributes
+                        refined_attrs = RefinedAttributes(
+                            opacities=ref_op, scales=ref_sc, colors=ref_col
+                        )
 
                 # Convert to gaussians
                 if refined_attrs is not None:
@@ -542,8 +552,8 @@ async def process_video_job(
                         depth_min=depth_min,
                         depth_max=depth_max,
                         validity_mask=validity_mask,
-                        scale_blend=0.5,
-                        opacity_blend=1.0,
+                        scale_blend=scale_blend,
+                        opacity_blend=opacity_blend,
                     )
                 else:
                     gaussians = equirect_to_gaussians(
@@ -638,11 +648,8 @@ async def get_job_status(job_id: str):
         response["total_frames"] = job.total_frames
         response["current_frame"] = job.current_frame
         if job.status == "complete":
-             response["preview_manifest_url"] = f"/api/preview_video/{job_id}/manifest.json"
-             response["zip_url"] = f"/api/download_video/{job_id}"
-    
-             response["preview_manifest_url"] = f"/api/preview_video/{job_id}/manifest.json"
-             response["zip_url"] = f"/api/download_video/{job_id}"
+            response["preview_manifest_url"] = f"/api/preview_video/{job_id}/manifest.json"
+            response["zip_url"] = f"/api/download_video/{job_id}"
     
     # Include params used
     if job.params:

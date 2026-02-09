@@ -217,7 +217,10 @@ class SPAG4D:
                     use_sharp = False
             
             # Ensure model is loaded (no-op if already loaded)
-            self.sharp_refiner.load_model()
+            if self.sharp_refiner is not None:
+                self.sharp_refiner.load_model()
+            else:
+                use_sharp = False
             
             # We need raw image tensor (0-1 float)
             # image_tensor is uint8 [H, W, 3] from earlier loading?

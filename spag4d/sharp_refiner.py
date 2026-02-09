@@ -80,8 +80,8 @@ class SHARPRefiner:
             from sharp.models import create_predictor, PredictorParams
         except ImportError:
             raise ImportError(
-                "SHARP not installed. Install with local path using `pip install -e .[sharp]` "
-                "or from git: `pip install git+https://github.com/apple/ml-sharp.git@v1.0.0`"
+                "SHARP not installed. Install from git: "
+                "`pip install git+https://github.com/apple/ml-sharp.git`"
             )
 
         # Load or download weights
