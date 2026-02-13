@@ -184,6 +184,116 @@ def filter_sky(
     }
 
 
+def generate_sky_dome(
+    image: torch.Tensor,
+    depth: torch.Tensor,
+    grid: SphericalGrid,
+    sky_threshold: float = 80.0,
+    dome_distance: float = 500.0,
+    dome_scale: float = 8.0,
+    dome_opacity: float = 0.7,
+    dome_stride: int = 4,
+) -> dict:
+    """
+    Generate a sky dome of large Gaussians for pixels beyond the sky threshold.
+    
+    Instead of clipping sky, place large semi-transparent Gaussians at a fixed
+    distance to form a continuous backdrop visible from the origin.
+    
+    Args:
+        image: RGB image [H, W, 3] uint8 or float [0,1]
+        depth: Depth map [H, W] in meters (full resolution)
+        grid: Precomputed SphericalGrid (already strided)
+        sky_threshold: Depth beyond which pixels are treated as sky
+        dome_distance: Distance (meters) to place sky Gaussians
+        dome_scale: Scale multiplier relative to base angular extent
+        dome_opacity: Opacity for sky Gaussians (0-1)
+        dome_stride: Additional subsampling of sky pixels (sky is smooth)
+    
+    Returns:
+        Gaussian dict (means, scales, quats, colors, opacities)
+    """
+    device = grid.device
+    H, W = grid.original_H, grid.original_W
+    stride = grid.stride
+    
+    # Image & depth to grid resolution
+    H_grid, W_grid = grid.theta.shape
+    
+    if image.dtype == torch.uint8:
+        colors = image.float() / 255.0
+    else:
+        colors = image.clone()
+    
+    if colors.shape[0] != H_grid or colors.shape[1] != W_grid:
+        colors = colors[stride//2::stride, stride//2::stride]
+    
+    if depth.shape[0] != H_grid or depth.shape[1] != W_grid:
+        depth = depth[stride//2::stride, stride//2::stride]
+    
+    # Sky mask: pixels beyond threshold
+    sky_mask = depth >= sky_threshold
+    
+    # Additional subsampling for sky (it's smooth, fewer Gaussians needed)
+    if dome_stride > 1:
+        subsample_mask = torch.zeros_like(sky_mask)
+        subsample_mask[::dome_stride, ::dome_stride] = True
+        sky_mask = sky_mask & subsample_mask
+    
+    if sky_mask.sum() == 0:
+        # No sky pixels — return empty dict
+        return {
+            'means': torch.zeros(0, 3, device=device),
+            'scales': torch.zeros(0, 3, device=device),
+            'quats': torch.zeros(0, 4, device=device),
+            'colors': torch.zeros(0, 3, device=device),
+            'opacities': torch.zeros(0, 1, device=device),
+        }
+    
+    # Place sky Gaussians at fixed distance along the ray direction
+    means = dome_distance * grid.rhat
+    
+    # Compute scales: large Gaussians that overlap to form continuous backdrop
+    delta_theta = 2 * math.pi / W
+    delta_phi = math.pi / H
+    sin_phi = torch.sin(grid.phi).clamp(min=0.01)
+    
+    # Effective stride for sky = grid stride × dome_stride
+    effective_stride = stride * dome_stride
+    
+    s_azimuth = dome_scale * dome_distance * sin_phi * delta_theta * effective_stride
+    s_elevation = torch.full_like(s_azimuth, dome_scale * dome_distance * delta_phi * effective_stride)
+    s_normal = torch.minimum(s_azimuth, s_elevation) * 0.01  # Very thin — flat billboard
+    
+    scales = torch.stack([s_azimuth, s_elevation, s_normal], dim=-1)
+    
+    # Quaternions: reuse grid's tangent frame
+    normal = -grid.rhat
+    right = grid.tangent_right
+    up = grid.tangent_up
+    R = torch.stack([right, up, normal], dim=-1)
+    quats = rotation_matrix_to_quaternion(R)
+    
+    # Flatten and filter to sky pixels
+    sky_flat = sky_mask.flatten()
+    
+    means_flat = means.reshape(-1, 3)[sky_flat]
+    scales_flat = scales.reshape(-1, 3)[sky_flat]
+    quats_flat = quats.reshape(-1, 4)[sky_flat]
+    colors_flat = colors.reshape(-1, 3)[sky_flat]
+    
+    N = means_flat.shape[0]
+    opacities_flat = torch.full((N, 1), dome_opacity, device=device)
+    
+    return {
+        'means': means_flat,
+        'scales': scales_flat,
+        'quats': quats_flat,
+        'colors': colors_flat,
+        'opacities': opacities_flat,
+    }
+
+
 def equirect_to_gaussians_refined(
     image: torch.Tensor,
     depth: torch.Tensor,
