@@ -61,6 +61,13 @@ class SPAG4DApp {
         // Depth Model Elements
         this.depthModelSelect = document.getElementById('depth-model');
         this.guidedFilterInput = document.getElementById('guided-filter');
+        this.guidedStrengthInput = document.getElementById('guided-strength');
+        this.guidedStrengthGroup = document.getElementById('guided-strength-group');
+
+        if (this.guidedFilterInput) {
+            this.guidedFilterInput.addEventListener('change', () => this.updateGuidedStrengthVisibility());
+            this.updateGuidedStrengthVisibility();
+        }
 
         if (this.sharpRefineInput) {
             this.sharpRefineInput.addEventListener('change', () => this.updateSharpVisibility());
@@ -343,7 +350,8 @@ class SPAG4DApp {
             color_blend: this.colorBlendInput ? this.colorBlendInput.value : 0.5,
             sky_dome: this.skyDomeInput ? this.skyDomeInput.checked : true,
             depth_model: this.depthModelSelect ? this.depthModelSelect.value : 'panda',
-            guided_filter: this.guidedFilterInput ? this.guidedFilterInput.checked : true
+            guided_filter: this.guidedFilterInput ? this.guidedFilterInput.checked : true,
+            guided_strength: this.guidedStrengthInput ? this.guidedStrengthInput.value : 1.0
         });
 
         try {

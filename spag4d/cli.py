@@ -40,6 +40,8 @@ def main():
               default='panda', help='Depth model: panda (default), da3 (Depth Anything V3), or dap (legacy)')
 @click.option('--guided-filter/--no-guided-filter', default=True,
               help='RGB-guided depth edge refinement (default: enabled)')
+@click.option('--guided-strength', type=float, default=1.0,
+              help='Strength of edge refinement (0.0-1.0)')
 # SHARP Options
 @click.option('--sharp-refine/--no-sharp-refine', default=True,
               help='Use SHARP model for perceptual attribute refinement (default: enabled)')
@@ -78,6 +80,7 @@ def convert(
     sharp_projection: str,
     scale_blend: float,
     opacity_blend: float,
+    guided_strength: float,
 ):
     """
     Convert equirectangular panorama to Gaussian splat.
@@ -136,6 +139,7 @@ def convert(
                     sh_degree=int(sh_degree),
                     output_format='splat' if output_format == 'splat' else 'ply',
                     force_erp=force_erp,
+                    guided_strength=guided_strength,
                     scale_blend=scale_blend,
                     opacity_blend=opacity_blend,
                 )
@@ -168,6 +172,7 @@ def convert(
             sh_degree=int(sh_degree),
             output_format=fmt,
             force_erp=force_erp,
+            guided_strength=guided_strength,
             scale_blend=scale_blend,
             opacity_blend=opacity_blend,
         )

@@ -194,7 +194,8 @@ async def convert_panorama(
     sky_dome: bool = Query(True),
     # Depth model selection
     depth_model: str = Query("panda"),
-    guided_filter: bool = Query(True)
+    guided_filter: bool = Query(True),
+    guided_strength: float = Query(1.0, ge=0.0, le=1.0)
 ):
     """
     Convert uploaded panorama to Gaussian splat.
@@ -211,10 +212,15 @@ async def convert_panorama(
     job = JobInfo(job_id)
     jobs[job_id] = job
     
+    # Force strength to 0 if filter is disabled (prevents state leak from reused processor)
+    if not guided_filter:
+        guided_strength = 0.0
+    
     # Store params for feedback
     job.params = {
         "depth_model": depth_model,
         "guided_filter": guided_filter,
+        "guided_strength": guided_strength,
         "sharp_refine": sharp_refine,
         "sharp_projection": sharp_projection,
         "scale_blend": scale_blend,
@@ -335,7 +341,8 @@ async def process_job(
     sharp_cubemap_size: int = 1536,
     sky_threshold: float = 80.0,
     color_blend: float = 0.5,
-    sky_dome: bool = True
+    sky_dome: bool = True,
+    guided_strength: float = 1.0
 ):
     """Process conversion job with GPU semaphore."""
     global processor
@@ -384,7 +391,8 @@ async def process_job(
                 color_blend=color_blend,
                 sharp_cubemap_size=sharp_cubemap_size,
                 sky_threshold=sky_threshold,
-                sky_dome=sky_dome
+                sky_dome=sky_dome,
+                guided_strength=guided_strength
             )
             
             # Generate web preview (low-res SPLAT)

@@ -51,6 +51,7 @@ class GuidedDepthRefiner:
         self,
         depth: torch.Tensor,
         rgb_guide: torch.Tensor,
+        strength: float = 1.0,
     ) -> torch.Tensor:
         """
         Refine depth edges using RGB guidance.
@@ -58,11 +59,17 @@ class GuidedDepthRefiner:
         Args:
             depth: Depth map [H, W] (any scale/range)
             rgb_guide: RGB image [H, W, 3] float [0, 1]
+            strength: Blend factor (0.0 = original, 1.0 = fully refined)
 
         Returns:
             Refined depth [H, W] with sharper edges
         """
         device = depth.device
+
+        # validation
+        strength = max(0.0, min(1.0, strength))
+        if strength <= 0.001:
+            return depth
 
         # Convert to numpy for filtering
         depth_np = depth.cpu().numpy().astype(np.float32)
@@ -84,6 +91,10 @@ class GuidedDepthRefiner:
         if result_max > result_min:
             result = (result - result_min) / (result_max - result_min)
             result = result * (orig_max - orig_min) + orig_min
+
+        # Apply strength blending
+        if strength < 1.0:
+            result = result * strength + depth * (1.0 - strength)
 
         return result
 

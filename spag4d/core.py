@@ -194,8 +194,10 @@ class SPAG4D:
         
         # Apply RGB-guided depth edge refinement
         if self.guided_refiner is not None:
-            img_float = image_tensor.float() / 255.0 if image_tensor.dtype == torch.uint8 else image_tensor.float()
-            depth = self.guided_refiner.refine(depth, img_float)
+            guided_strength = kwargs.get('guided_strength', 1.0)
+            if guided_strength > 0:
+                img_float = image_tensor.float() / 255.0 if image_tensor.dtype == torch.uint8 else image_tensor.float()
+                depth = self.guided_refiner.refine(depth, img_float, strength=guided_strength)
         
         # Save depth preview if requested
         if depth_preview_path:

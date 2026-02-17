@@ -276,6 +276,13 @@
                         <input type="checkbox" id="guided-filter" checked style="width: 18px; height: 18px;">
                     </div>
 
+                    <div class="param-group" id="guided-strength-group"
+                        style="border-left: 1px solid #444; padding-left: 10px; margin-left: 5px;">
+                        <label for="guided-strength">Refine Strength</label>
+                        <input type="range" id="guided-strength" min="0" max="1" step="0.1" value="1.0"
+                            title="Blend factor for edge refinement (0=Original Depth, 1=Fully Refined)">
+                    </div>
+
                     <div class="param-group"
                         title="Distance in meters beyond which points are removed. &#10;Use to cut out sky artifacts in open scenes.">
                         <label for="sky-threshold">Sky Cutoff (m)</label>
