@@ -138,10 +138,14 @@ def run_pipeline(args: argparse.Namespace) -> None:
     # When --depth-dir is given every frame gets a precomputed metric depth map
     # so the internal depth model is never called.  Use "mock" to skip loading
     # PanDA/DAP weights (saves ~2 GB VRAM and several seconds of init time).
-    depth_model = "mock" if args.depth_dir else ("mock" if args.use_mock_dap else "panda")
+    depth_model = "mock" if (args.depth_dir or args.use_mock_dap) else "panda"
+    # SHARP appearance refinement is not suited for metric depth and adds
+    # significant latency; disable it when --depth-dir or --no-sharp is set.
+    use_sharp = not (args.no_sharp or bool(args.depth_dir))
     converter = SPAG4D(
         device=args.device,
         depth_model=depth_model,
+        use_sharp_refinement=use_sharp,
     )
 
     # Build depth-dir lookup: map 0-indexed video frame number → EXR path
@@ -287,6 +291,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Directory of pre-computed metric DAP depth EXRs "
                         "(named NNNN.exr, 0-indexed by video frame). "
                         "Bypasses PanDA so splat scale matches cameras.npz metric poses.")
+    p.add_argument("--no-sharp",    action="store_true",
+                   help="Disable SHARP appearance refinement (faster; automatically "
+                        "enabled when --depth-dir is given since metric depth makes "
+                        "SHARP's corrections less meaningful)")
     p.add_argument("--skip-merge",  action="store_true",     help="Stop after per-frame PLY generation")
     p.add_argument("--use-mock-dap", action="store_true",    help="Use mock DAP (for testing)")
 
