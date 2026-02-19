@@ -254,6 +254,17 @@ class SPAG4D:
                 depth = torch.from_numpy(precomputed_depth.astype(np.float32)).to(self.device)
             else:
                 depth = precomputed_depth.to(self.device)
+            # Resize depth to match image if resolutions differ (e.g. depth saved
+            # at 1440×720 but image is 5760×2880 from S3PO super-resolution).
+            if depth.shape != (H, W):
+                import torch.nn.functional as _F
+                depth = _F.interpolate(
+                    depth.unsqueeze(0).unsqueeze(0),
+                    size=(H, W),
+                    mode="bilinear",
+                    align_corners=False,
+                ).squeeze(0).squeeze(0)
+                print(f"[SPAG4D] Resized precomputed depth to {W}x{H}")
             validity_mask = None
             print(f"[SPAG4D] Using precomputed depth: range [{depth.min():.2f}, {depth.max():.2f}] m")
         else:
