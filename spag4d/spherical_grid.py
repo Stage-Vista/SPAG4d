@@ -152,52 +152,58 @@ def rotation_matrix_to_quaternion(R: torch.Tensor) -> torch.Tensor:
     """
     batch_shape = R.shape[:-2]
     R = R.reshape(-1, 3, 3)
-    N = R.shape[0]
-    
-    # Shepperd's method: choose the largest diagonal element
-    # to avoid division by small numbers
+
+    # Shepperd's method — fully vectorized to avoid boolean index-assignment,
+    # which is buggy on MPS (mask count can differ between LHS and RHS).
+    # Compute all four cases for every element, then select with torch.where.
     trace = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]
-    
-    # Preallocate output
-    quat = torch.zeros(N, 4, device=R.device, dtype=R.dtype)
-    
-    # Case 1: trace > 0
-    mask1 = trace > 0
-    if mask1.any():
-        s = torch.sqrt(trace[mask1] + 1.0) * 2  # s = 4 * w
-        quat[mask1, 3] = 0.25 * s  # W
-        quat[mask1, 0] = (R[mask1, 2, 1] - R[mask1, 1, 2]) / s  # X
-        quat[mask1, 1] = (R[mask1, 0, 2] - R[mask1, 2, 0]) / s  # Y
-        quat[mask1, 2] = (R[mask1, 1, 0] - R[mask1, 0, 1]) / s  # Z
-    
-    # Case 2: R[0,0] > R[1,1] and R[0,0] > R[2,2]
-    mask2 = (~mask1) & (R[:, 0, 0] > R[:, 1, 1]) & (R[:, 0, 0] > R[:, 2, 2])
-    if mask2.any():
-        s = torch.sqrt(1.0 + R[mask2, 0, 0] - R[mask2, 1, 1] - R[mask2, 2, 2]) * 2
-        quat[mask2, 3] = (R[mask2, 2, 1] - R[mask2, 1, 2]) / s
-        quat[mask2, 0] = 0.25 * s
-        quat[mask2, 1] = (R[mask2, 0, 1] + R[mask2, 1, 0]) / s
-        quat[mask2, 2] = (R[mask2, 0, 2] + R[mask2, 2, 0]) / s
-    
-    # Case 3: R[1,1] > R[2,2]
-    mask3 = (~mask1) & (~mask2) & (R[:, 1, 1] > R[:, 2, 2])
-    if mask3.any():
-        s = torch.sqrt(1.0 + R[mask3, 1, 1] - R[mask3, 0, 0] - R[mask3, 2, 2]) * 2
-        quat[mask3, 3] = (R[mask3, 0, 2] - R[mask3, 2, 0]) / s
-        quat[mask3, 0] = (R[mask3, 0, 1] + R[mask3, 1, 0]) / s
-        quat[mask3, 1] = 0.25 * s
-        quat[mask3, 2] = (R[mask3, 1, 2] + R[mask3, 2, 1]) / s
-    
-    # Case 4: else
-    mask4 = (~mask1) & (~mask2) & (~mask3)
-    if mask4.any():
-        s = torch.sqrt(1.0 + R[mask4, 2, 2] - R[mask4, 0, 0] - R[mask4, 1, 1]) * 2
-        quat[mask4, 3] = (R[mask4, 1, 0] - R[mask4, 0, 1]) / s
-        quat[mask4, 0] = (R[mask4, 0, 2] + R[mask4, 2, 0]) / s
-        quat[mask4, 1] = (R[mask4, 1, 2] + R[mask4, 2, 1]) / s
-        quat[mask4, 2] = 0.25 * s
-    
+
+    # Case 1: trace > 0  →  s = 4w
+    s1 = torch.sqrt((trace + 1.0).clamp(min=1e-10)) * 2
+    q1 = torch.stack([
+        (R[:, 2, 1] - R[:, 1, 2]) / s1,  # X
+        (R[:, 0, 2] - R[:, 2, 0]) / s1,  # Y
+        (R[:, 1, 0] - R[:, 0, 1]) / s1,  # Z
+        0.25 * s1,                         # W
+    ], dim=-1)
+
+    # Case 2: R[0,0] largest diagonal  →  s = 4x
+    s2 = torch.sqrt((1.0 + R[:, 0, 0] - R[:, 1, 1] - R[:, 2, 2]).clamp(min=1e-10)) * 2
+    q2 = torch.stack([
+        0.25 * s2,                         # X
+        (R[:, 0, 1] + R[:, 1, 0]) / s2,  # Y
+        (R[:, 0, 2] + R[:, 2, 0]) / s2,  # Z
+        (R[:, 2, 1] - R[:, 1, 2]) / s2,  # W
+    ], dim=-1)
+
+    # Case 3: R[1,1] largest diagonal  →  s = 4y
+    s3 = torch.sqrt((1.0 + R[:, 1, 1] - R[:, 0, 0] - R[:, 2, 2]).clamp(min=1e-10)) * 2
+    q3 = torch.stack([
+        (R[:, 0, 1] + R[:, 1, 0]) / s3,  # X
+        0.25 * s3,                         # Y
+        (R[:, 1, 2] + R[:, 2, 1]) / s3,  # Z
+        (R[:, 0, 2] - R[:, 2, 0]) / s3,  # W
+    ], dim=-1)
+
+    # Case 4: R[2,2] largest diagonal  →  s = 4z
+    s4 = torch.sqrt((1.0 + R[:, 2, 2] - R[:, 0, 0] - R[:, 1, 1]).clamp(min=1e-10)) * 2
+    q4 = torch.stack([
+        (R[:, 0, 2] + R[:, 2, 0]) / s4,  # X
+        (R[:, 1, 2] + R[:, 2, 1]) / s4,  # Y
+        0.25 * s4,                         # Z
+        (R[:, 1, 0] - R[:, 0, 1]) / s4,  # W
+    ], dim=-1)
+
+    # Select the numerically best case via torch.where (no boolean indexing)
+    cond1 = (trace > 0).unsqueeze(-1)
+    cond2 = ((R[:, 0, 0] > R[:, 1, 1]) & (R[:, 0, 0] > R[:, 2, 2])).unsqueeze(-1)
+    cond3 = (R[:, 1, 1] > R[:, 2, 2]).unsqueeze(-1)
+
+    quat = torch.where(cond1, q1,
+           torch.where(cond2, q2,
+           torch.where(cond3, q3, q4)))
+
     # Normalize
     quat = quat / quat.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-    
+
     return quat.reshape(*batch_shape, 4)

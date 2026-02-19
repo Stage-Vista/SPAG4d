@@ -22,8 +22,9 @@ def equirect_to_gaussians(
     depth_min: float = 0.1,
     depth_max: float = 100.0,
     pole_rows: int = 3,
-    default_opacity: float = 0.95,
-    validity_mask: Optional[torch.Tensor] = None
+    default_opacity: float = 0.9,
+    validity_mask: Optional[torch.Tensor] = None,
+    depth_gradient_threshold: float = 0.5,
 ) -> dict:
     """
     Convert equirectangular panorama with depth to 3D Gaussians.
@@ -39,7 +40,10 @@ def equirect_to_gaussians(
         pole_rows: Rows to exclude at top/bottom poles
         default_opacity: Opacity for all Gaussians
         validity_mask: Optional [H, W] mask from depth model (0-1 or bool)
-    
+        depth_gradient_threshold: Relative depth-gradient cutoff. Pixels where
+            |∇depth| / depth exceeds this are rejected (removes edge floaters).
+            Use 0 to disable. Good starting values: 0.3 (aggressive) – 0.7 (mild).
+
     Returns:
         Dict with:
             means: [N, 3] 3D positions (Y-up frame)
@@ -92,7 +96,22 @@ def equirect_to_gaussians(
         pole_mask[:pole_rows, :] = False
         pole_mask[-pole_rows:, :] = False
         valid_mask = valid_mask & pole_mask
-    
+
+    # Depth-discontinuity filter — removes boundary floaters.
+    # Computes a per-pixel relative depth gradient; pixels where the local
+    # depth changes sharply relative to the depth value itself sit on
+    # foreground/background edges and produce mid-air Gaussians.
+    if depth_gradient_threshold > 0:
+        import torch.nn.functional as F
+        d = depth.unsqueeze(0).unsqueeze(0).float()          # [1, 1, H_g, W_g]
+        d_pad = F.pad(d, (1, 1, 1, 1), mode='replicate')
+        dx = d_pad[:, :, 1:-1, 2:] - d_pad[:, :, 1:-1, :-2]  # central diff X
+        dy = d_pad[:, :, 2:, 1:-1] - d_pad[:, :, :-2, 1:-1]  # central diff Y
+        grad_mag = (dx.squeeze(0).squeeze(0) ** 2 +
+                    dy.squeeze(0).squeeze(0) ** 2).sqrt()
+        rel_grad = grad_mag / depth.float().clamp(min=depth_min)
+        valid_mask = valid_mask & (rel_grad < depth_gradient_threshold)
+
     # ─────────────────────────────────────────────────────────────────
     # 3D Positions: P = depth * r̂
     # ─────────────────────────────────────────────────────────────────
@@ -304,11 +323,12 @@ def equirect_to_gaussians_refined(
     depth_min: float = 0.1,
     depth_max: float = 100.0,
     pole_rows: int = 3,
-    default_opacity: float = 0.95,
+    default_opacity: float = 0.9,
     validity_mask: Optional[torch.Tensor] = None,
     scale_blend: float = 0.8,
     opacity_blend: float = 1.0,
     color_blend: float = 0.5,
+    depth_gradient_threshold: float = 0.5,
 ) -> dict:
     """
     Convert ERP panorama to Gaussians with optional SHARP refinements.
@@ -328,7 +348,8 @@ def equirect_to_gaussians_refined(
         image, depth, grid,
         scale_factor, thickness_ratio,
         depth_min, depth_max, pole_rows,
-        default_opacity, validity_mask
+        default_opacity, validity_mask,
+        depth_gradient_threshold=depth_gradient_threshold,
     )
 
     if refined_attrs is None:
