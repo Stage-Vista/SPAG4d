@@ -135,9 +135,13 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     from spag4d import SPAG4D
 
+    # When --depth-dir is given every frame gets a precomputed metric depth map
+    # so the internal depth model is never called.  Use "mock" to skip loading
+    # PanDA/DAP weights (saves ~2 GB VRAM and several seconds of init time).
+    depth_model = "mock" if args.depth_dir else ("mock" if args.use_mock_dap else "panda")
     converter = SPAG4D(
         device=args.device,
-        use_mock_dap=args.use_mock_dap,
+        depth_model=depth_model,
     )
 
     # Build depth-dir lookup: map 0-indexed video frame number → EXR path
