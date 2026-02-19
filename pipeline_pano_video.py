@@ -29,6 +29,10 @@ Optional flags (all have sensible defaults):
   --depth-gradient-threshold float  (default: 0.5; 0=off, 0.3=aggressive)
   --frame-step      int                    (default: 1, use every Nth frame)
   --frames-dir      path                   (skip extraction; use existing frames)
+  --depth-dir       path                   (pre-computed metric DAP depth EXRs;
+                                            named NNNN.exr, 0-indexed by video frame.
+                                            When provided, bypasses PanDA so splat scale
+                                            matches the metric cameras.npz poses.)
   --skip-merge                             (stop after PLY generation)
   --use-mock-dap                           (use mock depth model for testing)
 """
@@ -136,6 +140,9 @@ def run_pipeline(args: argparse.Namespace) -> None:
         use_mock_dap=args.use_mock_dap,
     )
 
+    # Build depth-dir lookup: map 0-indexed video frame number → EXR path
+    depth_dir = Path(args.depth_dir) if args.depth_dir else None
+
     ply_paths: list[Path] = []
     for i, frame_path in enumerate(frames):
         ply_path = plys_dir / f"{frame_path.stem}.ply"
@@ -145,6 +152,21 @@ def run_pipeline(args: argparse.Namespace) -> None:
             print(f"  [{i+1}/{len(frames)}] {frame_path.name} → (cached) {ply_path.name}")
             ply_paths.append(ply_path)
             continue
+
+        # Resolve pre-computed depth map for this frame (if depth-dir provided).
+        # ffmpeg names frames frame_0001.png (1-indexed); DAP temporal saves
+        # {frame_idx:04d}.exr (0-indexed), so subtract 1 to match.
+        precomputed_depth = None
+        if depth_dir is not None:
+            try:
+                frame_num = int(frame_path.stem.split("_")[-1])
+                depth_exr = depth_dir / f"{frame_num - 1:04d}.exr"
+                if depth_exr.exists():
+                    precomputed_depth = depth_exr
+                else:
+                    print(f"\n  [depth-dir] {depth_exr.name} not found, falling back to PanDA")
+            except (ValueError, IndexError):
+                pass
 
         print(f"  [{i+1}/{len(frames)}] {frame_path.name} → {ply_path.name}", end="", flush=True)
         result = converter.convert(
@@ -160,6 +182,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             sh_degree=args.sh_degree,
             output_format="ply",
             depth_gradient_threshold=args.depth_gradient_threshold,
+            precomputed_depth=precomputed_depth,
         )
         print(f"  {result.splat_count:,} splats  ({result.processing_time:.1f}s)")
         ply_paths.append(ply_path)
@@ -256,6 +279,10 @@ def build_parser() -> argparse.ArgumentParser:
     # Pipeline control
     p.add_argument("--frame-step",  type=int,  default=1,   help="Use every Nth frame (1=all)")
     p.add_argument("--frames-dir",  default=None,            help="Use pre-extracted frames dir")
+    p.add_argument("--depth-dir",   default=None,
+                   help="Directory of pre-computed metric DAP depth EXRs "
+                        "(named NNNN.exr, 0-indexed by video frame). "
+                        "Bypasses PanDA so splat scale matches cameras.npz metric poses.")
     p.add_argument("--skip-merge",  action="store_true",     help="Stop after per-frame PLY generation")
     p.add_argument("--use-mock-dap", action="store_true",    help="Use mock DAP (for testing)")
 

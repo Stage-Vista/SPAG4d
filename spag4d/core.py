@@ -180,11 +180,12 @@ class SPAG4D:
         depth_gradient_threshold: float = 0.5,
         force_erp: bool = False,
         depth_preview_path: Optional[Union[str, Path]] = None,
+        precomputed_depth: Optional[Union[str, Path, torch.Tensor]] = None,
         **kwargs
     ) -> ConversionResult:
         """
         Convert equirectangular panorama to Gaussian splat.
-        
+
         Args:
             input_path: Path to input ERP image
             output_path: Path for output file
@@ -198,7 +199,12 @@ class SPAG4D:
             sh_degree: Spherical harmonics degree (0 or 3)
             output_format: Output format ("ply" or "splat")
             force_erp: Process even if aspect ratio isn't 2:1
-        
+            precomputed_depth: Optional pre-computed metric depth map (EXR path,
+                numpy array, or torch tensor [H, W] in metres). When provided,
+                skips the internal depth model entirely, which is essential when
+                the camera poses (cameras.npz) were generated with a metric depth
+                model (e.g. DAP) so the splat scale matches the pose scale.
+
         Returns:
             ConversionResult with output details
         """
@@ -232,9 +238,28 @@ class SPAG4D:
             )
         grid = self._grid_cache[grid_key]
         
-        # Estimate depth with depth model (PanDA, DAP, or mock)
-        with torch.inference_mode():
-            depth, validity_mask = self.dap.predict(image_tensor)
+        # Estimate depth — use precomputed metric depth if provided, otherwise run model
+        if precomputed_depth is not None:
+            if isinstance(precomputed_depth, (str, Path)):
+                import cv2 as _cv2
+                _os = __import__("os")
+                _os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+                depth_np = _cv2.imread(str(precomputed_depth), _cv2.IMREAD_ANYDEPTH | _cv2.IMREAD_ANYCOLOR)
+                if depth_np is None:
+                    raise ValueError(f"Failed to load depth map: {precomputed_depth}")
+                if depth_np.ndim == 3:
+                    depth_np = depth_np[:, :, 0]
+                depth = torch.from_numpy(depth_np.astype(np.float32)).to(self.device)
+            elif isinstance(precomputed_depth, np.ndarray):
+                depth = torch.from_numpy(precomputed_depth.astype(np.float32)).to(self.device)
+            else:
+                depth = precomputed_depth.to(self.device)
+            validity_mask = None
+            print(f"[SPAG4D] Using precomputed depth: range [{depth.min():.2f}, {depth.max():.2f}] m")
+        else:
+            # Estimate depth with depth model (PanDA, DAP, or mock)
+            with torch.inference_mode():
+                depth, validity_mask = self.dap.predict(image_tensor)
         
         # Apply RGB-guided depth edge refinement
         if self.guided_refiner is not None:
